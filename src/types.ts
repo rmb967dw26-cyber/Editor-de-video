@@ -1,3 +1,14 @@
+/** Archivo importado en la biblioteca de medios. */
+export interface MediaItem {
+  id: string
+  kind: 'video' | 'audio'
+  file: File
+  url: string
+  name: string
+  duration: number
+  thumbnail: string | null
+}
+
 export interface Clip {
   id: string
   file: File

@@ -1,17 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { captureThumbnail, formatTime, newId, readDuration } from './media'
-import { clipLength, placeTransitions, type Clip, type MusicTrack, type Stinger } from './types'
-import { Timeline } from './Timeline'
+import { captureThumbnail, formatTimecode, newId, readDuration } from './media'
+import { clipLength, placeTransitions, type Clip, type MediaItem, type MusicTrack, type Stinger } from './types'
+import { Timeline, type Tool } from './Timeline'
 import { Inspector } from './Inspector'
 import { ExportDialog } from './ExportDialog'
+import { MediaPool } from './MediaPool'
+import { SourceViewer } from './SourceViewer'
+import { EffectsLibrary } from './EffectsLibrary'
+import { Mixer } from './Mixer'
+import { audioEngine } from './audioEngine'
 
 const isAudioFile = (f: File) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)
 const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)
+const isWide = () => typeof window === 'undefined' || window.matchMedia('(min-width: 1100px)').matches
+
+const clipFromMedia = (item: MediaItem, start = 0, end = item.duration): Clip => ({
+  id: newId(), file: item.file, url: item.url, name: item.name, duration: item.duration,
+  start, end, volume: 1, muted: false, thumbnail: item.thumbnail, transitionId: null,
+})
 
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [music, setMusic] = useState<MusicTrack | null>(null)
   const [stingers, setStingers] = useState<Stinger[]>([])
+  const [media, setMedia] = useState<MediaItem[]>([])
+  const [sourceId, setSourceId] = useState<string | null>(null)
+  const [tool, setTool] = useState<Tool>('select')
+  const [a1, setA1] = useState({ gain: 1, muted: false })
+  const [a2Muted, setA2Muted] = useState(false)
+  const [panels, setPanels] = useState(() => ({ pool: true, effects: true, inspector: true, mixer: isWide(), source: isWide() }))
+  const togglePanel = (k: keyof typeof panels) => setPanels((p) => ({ ...p, [k]: !p[k] }))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -25,7 +43,6 @@ export default function App() {
   const stingerRef = useRef<HTMLVideoElement>(null)
   const stingerInput = useRef<HTMLInputElement>(null)
   const videoInput = useRef<HTMLInputElement>(null)
-  const musicInput = useRef<HTMLInputElement>(null)
 
   // Posición de cada clip en la línea de tiempo global.
   const starts = useMemo(() => {
@@ -40,7 +57,7 @@ export default function App() {
   const transitions = useMemo(() => placeTransitions(clips, starts, stingers), [clips, starts, stingers])
 
   // Referencias que el bucle de reproducción lee sin re-suscribirse.
-  const state = useRef({ clips, starts, total, music, transitions, playing, index: -1, token: 0 })
+  const state = useRef({ clips, starts, total, music, transitions, playing, a1, a2Muted, index: -1, token: 0 })
   // Fotograma que mostrar tras el próximo cambio de clips (al recortar).
   const pendingPreview = useRef<{ id: string; local: number } | null>(null)
   state.current.clips = clips
@@ -49,6 +66,8 @@ export default function App() {
   state.current.music = music
   state.current.transitions = transitions
   state.current.playing = playing
+  state.current.a1 = a1
+  state.current.a2Muted = a2Muted
 
   const indexAt = useCallback((t: number) => {
     const { clips, starts } = state.current
@@ -57,15 +76,16 @@ export default function App() {
   }, [])
 
   const applyVolume = useCallback((clip: Clip | undefined) => {
-    const v = videoRef.current
-    if (v && clip) v.volume = clip.muted ? 0 : Math.min(1, clip.volume)
+    if (!clip) return
+    const { a1 } = state.current
+    audioEngine.setVolume('a1', videoRef.current, clip.muted || a1.muted ? 0 : clip.volume * a1.gain)
   }, [])
 
   const syncMusic = useCallback((t: number, force = false) => {
     const a = audioRef.current
     const m = state.current.music
     if (!a || !m) return
-    a.volume = Math.min(1, m.volume)
+    audioEngine.setVolume('a2', a, state.current.a2Muted ? 0 : m.volume)
     const target = m.offset + t
     if (target >= m.duration) {
       a.pause()
@@ -173,6 +193,7 @@ export default function App() {
       setPlaying(false)
       return
     }
+    audioEngine.start()
     state.current.playing = true
     setPlaying(true)
     const t = time >= total - 0.05 ? 0 : time
@@ -208,12 +229,19 @@ export default function App() {
 
   useEffect(() => {
     applyVolume(clips[state.current.index])
-  }, [clips, applyVolume])
+  }, [clips, a1, applyVolume])
 
   useEffect(() => {
     syncMusic(time, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [music])
+  }, [music, a2Muted])
+
+  // Conecta los elementos de la vista previa al motor de audio (medidores y volumen por pista).
+  useEffect(() => {
+    if (videoRef.current) audioEngine.register(videoRef.current, 'a1')
+    if (audioRef.current) audioEngine.register(audioRef.current, 'a2')
+    if (stingerRef.current) audioEngine.register(stingerRef.current, 'fx')
+  }, [])
 
   useEffect(() => {
     syncStinger(time, true)
@@ -228,18 +256,23 @@ export default function App() {
     const ignored = files.length - videos.length - audios.length
     if (ignored > 0) setError(`Se ignoraron ${ignored} archivo(s) que no son de video ni de audio.`)
 
-    setImporting((n) => n + videos.length + (audios.length ? 1 : 0))
-    for (const file of videos) {
+    setImporting((n) => n + videos.length + audios.length)
+    for (const file of [...videos, ...audios]) {
+      const kind = videos.includes(file) ? 'video' : 'audio'
       const url = URL.createObjectURL(file)
       try {
-        const duration = await readDuration(url, 'video')
-        const thumbnail = await captureThumbnail(url, Math.min(0.5, duration / 2))
-        const clip: Clip = {
-          id: newId(), file, url, name: file.name, duration,
-          start: 0, end: duration, volume: 1, muted: false, thumbnail, transitionId: null,
+        const duration = await readDuration(url, kind)
+        const thumbnail = kind === 'video' ? await captureThumbnail(url, Math.min(0.5, duration / 2)) : null
+        const item: MediaItem = { id: newId(), kind, file, url, name: file.name, duration, thumbnail }
+        setMedia((m) => [...m, item])
+        setSourceId((s) => s ?? item.id)
+        if (kind === 'video') {
+          const clip = clipFromMedia(item)
+          setClips((cs) => [...cs, clip])
+          setSelectedId((s) => s ?? clip.id)
+        } else {
+          setMusic((old) => old ?? musicFromMedia(item))
         }
-        setClips((cs) => [...cs, clip])
-        setSelectedId((s) => s ?? clip.id)
       } catch (e) {
         URL.revokeObjectURL(url)
         setError(`No se pudo abrir «${file.name}»: ${(e as Error).message}`)
@@ -247,22 +280,17 @@ export default function App() {
         setImporting((n) => n - 1)
       }
     }
-    if (audios.length) {
-      const file = audios[0]
-      const url = URL.createObjectURL(file)
-      try {
-        const duration = await readDuration(url, 'audio')
-        setMusic((old) => {
-          if (old) URL.revokeObjectURL(old.url)
-          return { file, url, name: file.name, duration, offset: 0, volume: 0.6, fadeOut: true }
-        })
-      } catch (e) {
-        URL.revokeObjectURL(url)
-        setError(`No se pudo abrir «${file.name}»: ${(e as Error).message}`)
-      } finally {
-        setImporting((n) => n - 1)
-      }
-    }
+  }, [])
+
+  /** Añade un clip desde la biblioteca, en la posición `index` (al final si se omite). */
+  const insertClip = useCallback((item: MediaItem, index?: number, start?: number, end?: number) => {
+    const clip = clipFromMedia(item, start, end)
+    setClips((cs) => {
+      const next = [...cs]
+      next.splice(index ?? cs.length, 0, clip)
+      return next
+    })
+    setSelectedId(clip.id)
   }, [])
 
   /** Importa transiciones stinger (WEBM con transparencia). */
@@ -301,13 +329,8 @@ export default function App() {
   }, [])
 
   const removeClip = useCallback((id: string) => {
-    setClips((cs) => {
-      const clip = cs.find((c) => c.id === id)
-      const rest = cs.filter((c) => c.id !== id)
-      // Solo libera la URL si ningún otro clip (p. ej. tras dividir) usa el mismo archivo.
-      if (clip && !rest.some((c) => c.url === clip.url)) URL.revokeObjectURL(clip.url)
-      return rest
-    })
+    // El archivo sigue en la biblioteca de medios, así que su URL no se libera.
+    setClips((cs) => cs.filter((c) => c.id !== id))
     setSelectedId((s) => (s === id ? null : s))
   }, [])
 
@@ -321,14 +344,15 @@ export default function App() {
     })
   }, [])
 
-  /** Divide el clip bajo el cursor en dos. */
-  const splitAtPlayhead = useCallback(() => {
+  /** Divide en dos el clip que hay en el instante `at` (por defecto, bajo el cursor). */
+  const splitAt = useCallback((at?: number) => {
     if (clips.length === 0) return
-    const i = indexAt(time)
+    const time_ = at ?? time
+    const i = indexAt(time_)
     const clip = clips[i]
-    const cut = clip.start + (time - starts[i])
+    const cut = clip.start + (time_ - starts[i])
     if (cut - clip.start < 0.1 || clip.end - cut < 0.1) {
-      setError('Mueve el cursor más lejos de los bordes del clip para dividirlo.')
+      setError('Corta un poco más lejos de los bordes del clip.')
       return
     }
     const second: Clip = { ...clip, id: newId(), start: cut }
@@ -338,7 +362,8 @@ export default function App() {
       return next
     })
     setSelectedId(second.id)
-  }, [clips, starts, time, indexAt])
+    if (at !== undefined) seek(at)
+  }, [clips, starts, time, indexAt, seek])
 
   // Atajos de teclado.
   useEffect(() => {
@@ -349,7 +374,11 @@ export default function App() {
         e.preventDefault()
         togglePlay()
       } else if (e.key === 's' || e.key === 'S') {
-        splitAtPlayhead()
+        splitAt()
+      } else if (e.key === 'b' || e.key === 'B') {
+        setTool('blade')
+      } else if (e.key === 'a' || e.key === 'A' || e.key === 'Escape') {
+        setTool('select')
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         removeClip(selectedId)
       } else if (e.key === 'ArrowLeft') {
@@ -360,10 +389,17 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, splitAtPlayhead, removeClip, selectedId, seek, time, showExport])
+  }, [togglePlay, splitAt, removeClip, selectedId, seek, time, showExport])
 
   const selectedIndex = clips.findIndex((c) => c.id === selectedId)
   const selected = selectedIndex >= 0 ? clips[selectedIndex] : null
+
+  const sourceItem = media.find((m) => m.id === sourceId) ?? null
+
+  const activateMedia = (item: MediaItem) => {
+    if (item.kind === 'video') insertClip(item)
+    else setMusic(musicFromMedia(item))
+  }
 
   return (
     <div
@@ -385,24 +421,23 @@ export default function App() {
       }}
     >
       <header className="topbar">
-        <h1>🎬 Editor de Video</h1>
-        <div className="actions">
-          <button onClick={() => videoInput.current?.click()}>＋ Añadir videos</button>
-          <button onClick={() => musicInput.current?.click()}>♪ {music ? 'Cambiar música' : 'Añadir música'}</button>
-          <button onClick={() => stingerInput.current?.click()}>✨ Transiciones</button>
-          <button className="primary" disabled={clips.length === 0} onClick={() => setShowExport(true)}>
-            Exportar MP4
+        <div className="topbar-group">
+          <button className={`top-btn ${panels.pool ? 'on' : ''}`} onClick={() => togglePanel('pool')}>▤ Medios</button>
+          <button className={`top-btn ${panels.effects ? 'on' : ''}`} onClick={() => togglePanel('effects')}>✦ Efectos</button>
+          <button className={`top-btn hide-narrow ${panels.source ? 'on' : ''}`} onClick={() => togglePanel('source')}>◫ Visor doble</button>
+        </div>
+        <h1 className="project-title">
+          Proyecto sin título <span className="muted">{clips.length ? '· Editado' : ''}</span>
+        </h1>
+        <div className="topbar-group">
+          <button className={`top-btn hide-narrow ${panels.mixer ? 'on' : ''}`} onClick={() => togglePanel('mixer')}>☷ Mezclador</button>
+          <button className={`top-btn ${panels.inspector ? 'on' : ''}`} onClick={() => togglePanel('inspector')}>⚙ Inspector</button>
+          <button className="top-btn export-btn" disabled={clips.length === 0} onClick={() => setShowExport(true)}>
+            ⇪ Exportar
           </button>
         </div>
         <input
-          ref={videoInput} type="file" accept="video/*" multiple hidden
-          onChange={(e) => {
-            addFiles([...(e.target.files ?? [])])
-            e.target.value = ''
-          }}
-        />
-        <input
-          ref={musicInput} type="file" accept="audio/*" hidden
+          ref={videoInput} type="file" accept="video/*,audio/*" multiple hidden
           onChange={(e) => {
             addFiles([...(e.target.files ?? [])])
             e.target.value = ''
@@ -424,81 +459,175 @@ export default function App() {
         </div>
       )}
 
-      <main className="workspace">
-        <section className="preview">
-          <div className="screen">
-            <video ref={videoRef} playsInline onClick={togglePlay} />
-            <video ref={stingerRef} className="stinger" playsInline preload="auto" style={{ visibility: 'hidden' }} />
-            {clips.length === 0 && (
-              <div className="empty">
-                <p>Arrastra aquí tus videos y una canción</p>
-                <p className="muted">o usa los botones de arriba</p>
-                {importing > 0 && <p>Importando…</p>}
-              </div>
-            )}
-          </div>
-          <div className="transport">
-            <button onClick={() => seek(0)} disabled={!clips.length} title="Ir al inicio">⏮</button>
-            <button className="play" onClick={togglePlay} disabled={!clips.length} title="Reproducir / pausar (espacio)">
-              {playing ? '⏸' : '▶'}
-            </button>
-            <button onClick={splitAtPlayhead} disabled={!clips.length} title="Dividir clip en el cursor (S)">
-              ✂ Dividir
-            </button>
-            <span className="timecode">
-              {formatTime(time)} / {formatTime(total)}
-            </span>
-            {importing > 0 && <span className="muted">Importando {importing}…</span>}
-          </div>
-          <audio ref={audioRef} src={music?.url} preload="auto" />
-        </section>
+      <div className={`upper ${panels.pool ? '' : 'no-left'} ${panels.inspector ? '' : 'no-right'}`}>
+        {panels.pool && (
+          <MediaPool
+            items={media}
+            selectedId={sourceId}
+            importing={importing}
+            onSelect={(item) => setSourceId(item.id)}
+            onActivate={activateMedia}
+            onImport={() => videoInput.current?.click()}
+          />
+        )}
 
-        <Inspector
-          clip={selected}
-          index={selectedIndex}
-          count={clips.length}
-          music={music}
-          stingers={stingers}
-          onChange={(patch, previewAt) => {
-            if (!selected) return
-            if (previewAt !== undefined) {
-              pendingPreview.current = { id: selected.id, local: previewAt }
-              setPlaying(false)
+        <div className={`viewers ${panels.source ? 'dual' : ''}`}>
+          {panels.source && (
+            <SourceViewer item={sourceItem} onAppend={(item, start, end) => insertClip(item, undefined, start, end)} />
+          )}
+          <section className="viewer program-viewer">
+            <header className="viewer-head">
+              <span className="viewer-name">Línea de tiempo 1</span>
+              <span className="tc tc-program">{formatTimecode(time)}</span>
+            </header>
+            <div className="viewer-screen">
+              <video ref={videoRef} playsInline onClick={togglePlay} />
+              <video ref={stingerRef} className="stinger" playsInline preload="auto" style={{ visibility: 'hidden' }} />
+              {clips.length === 0 && (
+                <div className="empty">
+                  <p>Arrastra aquí tus videos y una canción</p>
+                  <button className="small" onClick={() => videoInput.current?.click()}>Importar archivos</button>
+                </div>
+              )}
+            </div>
+            <div className="viewer-transport">
+              <button className="icon-btn" onClick={() => seek(0)} disabled={!clips.length} title="Ir al inicio">⏮</button>
+              <button className="icon-btn" onClick={() => seek(time - 1 / 30)} disabled={!clips.length} title="Fotograma anterior (←)">◀︎|</button>
+              <button className="icon-btn play-btn" onClick={togglePlay} disabled={!clips.length} title="Reproducir / pausar (espacio)">
+                {playing ? '❚❚' : '▶'}
+              </button>
+              <button className="icon-btn" onClick={() => seek(time + 1 / 30)} disabled={!clips.length} title="Fotograma siguiente (→)">|▶︎</button>
+              <button className="icon-btn" onClick={() => seek(total)} disabled={!clips.length} title="Ir al final">⏭</button>
+              <button className="icon-btn" onClick={() => splitAt()} disabled={!clips.length} title="Dividir clip en el cursor (S)">✂ Dividir</button>
+            </div>
+          </section>
+          <audio ref={audioRef} src={music?.url} preload="auto" />
+        </div>
+
+        {panels.inspector && (
+          <Inspector
+            clip={selected}
+            index={selectedIndex}
+            count={clips.length}
+            music={music}
+            stingers={stingers}
+            onChange={(patch, previewAt) => {
+              if (!selected) return
+              if (previewAt !== undefined) {
+                pendingPreview.current = { id: selected.id, local: previewAt }
+                setPlaying(false)
+              }
+              updateClip(selected.id, patch)
+            }}
+            onRemove={() => selected && removeClip(selected.id)}
+            onMove={(dir) => moveClip(selectedIndex, selectedIndex + dir)}
+            onApplyTransitionToAll={(transitionId) =>
+              setClips((cs) => cs.map((c, i) => (i < cs.length - 1 ? { ...c, transitionId } : c)))
             }
-            updateClip(selected.id, patch)
+            onAddStingers={() => stingerInput.current?.click()}
+            onStingerChange={(id, patch) =>
+              setStingers((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+            }
+            onStingerRemove={removeStinger}
+            onMusicChange={(patch) => setMusic((m) => (m ? { ...m, ...patch } : m))}
+            onMusicRemove={() => setMusic(null)}
+          />
+        )}
+      </div>
+
+      <div className={`lower ${panels.effects ? '' : 'no-left'} ${panels.mixer ? '' : 'no-right'}`}>
+        {panels.effects && (
+          <EffectsLibrary stingers={stingers} onImport={() => stingerInput.current?.click()} onRemove={removeStinger} />
+        )}
+        <Timeline
+          clips={clips}
+          starts={starts}
+          total={total}
+          time={time}
+          music={music}
+          transitions={transitions}
+          selectedId={selectedId}
+          tool={tool}
+          a1Muted={a1.muted}
+          a2Muted={a2Muted}
+          onToolChange={setTool}
+          onToggleMute={(track) => (track === 'a1' ? setA1((a) => ({ ...a, muted: !a.muted })) : setA2Muted((m) => !m))}
+          onSelect={setSelectedId}
+          onSeek={(t) => seek(t)}
+          onMove={moveClip}
+          onSplitAt={(t) => splitAt(t)}
+          onDropMedia={(id, t) => {
+            const item = media.find((m) => m.id === id)
+            if (!item) return
+            if (item.kind === 'audio') {
+              setMusic(musicFromMedia(item))
+              return
+            }
+            // Inserta antes del primer clip cuya mitad quede a la derecha del punto soltado.
+            const index = clips.findIndex((c, i) => starts[i] + clipLength(c) / 2 > t)
+            insertClip(item, index === -1 ? undefined : index)
           }}
-          onRemove={() => selected && removeClip(selected.id)}
-          onMove={(dir) => moveClip(selectedIndex, selectedIndex + dir)}
-          onApplyTransitionToAll={(transitionId) =>
-            setClips((cs) => cs.map((c, i) => (i < cs.length - 1 ? { ...c, transitionId } : c)))
-          }
-          onAddStingers={() => stingerInput.current?.click()}
-          onStingerChange={(id, patch) =>
-            setStingers((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)))
-          }
-          onStingerRemove={removeStinger}
-          onMusicChange={(patch) => setMusic((m) => (m ? { ...m, ...patch } : m))}
-          onMusicRemove={() => {
-            if (music) URL.revokeObjectURL(music.url)
-            setMusic(null)
+          onDropStinger={(id, t) => {
+            if (clips.length < 2) {
+              setError('Añade al menos dos clips para poner una transición entre ellos.')
+              return
+            }
+            // Corte más cercano al punto donde se soltó la transición.
+            let best = 0
+            for (let k = 1; k < clips.length - 1; k++) {
+              if (Math.abs(starts[k + 1] - t) < Math.abs(starts[best + 1] - t)) best = k
+            }
+            updateClip(clips[best].id, { transitionId: id })
+            setSelectedId(clips[best].id)
           }}
         />
-      </main>
+        {panels.mixer && (
+          <Mixer
+            strips={[
+              {
+                id: 'a1', label: 'A1', value: a1.gain, muted: a1.muted,
+                onChange: (gain) => setA1((a) => ({ ...a, gain })),
+                onMute: () => setA1((a) => ({ ...a, muted: !a.muted })),
+              },
+              {
+                id: 'a2', label: 'A2', value: music?.volume ?? 0, muted: a2Muted, disabled: !music,
+                onChange: (volume) => setMusic((m) => (m ? { ...m, volume } : m)),
+                onMute: () => setA2Muted((m) => !m),
+              },
+              { id: 'master', label: 'Bus 1' },
+            ]}
+          />
+        )}
+      </div>
 
-      <Timeline
-        clips={clips}
-        starts={starts}
-        total={total}
-        time={time}
-        music={music}
-        transitions={transitions}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-        onSeek={(t) => seek(t)}
-        onMove={moveClip}
-      />
+      <nav className="pagebar" aria-label="Páginas">
+        <button className={`page ${panels.pool ? '' : ''}`} onClick={() => videoInput.current?.click()}>
+          <span className="page-icon">▤</span>Medios
+        </button>
+        <button className="page active">
+          <span className="page-icon">✂</span>Editar
+        </button>
+        <button className={`page ${panels.mixer ? 'on' : ''}`} onClick={() => togglePanel('mixer')}>
+          <span className="page-icon">♫</span>Audio
+        </button>
+        <button className="page" disabled={clips.length === 0} onClick={() => setShowExport(true)}>
+          <span className="page-icon">⇪</span>Exportar
+        </button>
+      </nav>
 
-      {showExport && <ExportDialog clips={clips} music={music} transitions={transitions} total={total} onClose={() => setShowExport(false)} />}
+      {showExport && (
+        <ExportDialog
+          clips={clips.map((c) => ({ ...c, volume: c.volume * a1.gain, muted: c.muted || a1.muted }))}
+          music={a2Muted ? null : music}
+          transitions={transitions}
+          total={total}
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   )
+}
+
+function musicFromMedia(item: MediaItem): MusicTrack {
+  return { file: item.file, url: item.url, name: item.name, duration: item.duration, offset: 0, volume: 0.6, fadeOut: true }
 }

@@ -4,13 +4,15 @@ Editor de video que funciona en el navegador. Todo se procesa en tu equipo: los 
 
 ## Funciones
 
+Interfaz de editor profesional: biblioteca de medios, visor de origen y de programa, inspector con pestañas, panel de efectos, línea de tiempo con pistas V1/A1/A2 y formas de onda, y mezclador con medidores de nivel.
+
 - **Clips:** importa varios videos (botón o arrastrar y soltar), recórtalos, divídelos en el cursor y reordénalos arrastrando en la línea de tiempo.
 - **Transiciones stinger:** importa WEBM con transparencia, elige el punto de corte y asígnalas entre clips. Se ven en la vista previa y se incluyen al exportar, con su sonido.
 - **Audio:** ajusta el volumen de cada clip o siléncialo, y añade música de fondo con punto de inicio, volumen y fundido de salida.
 - **Vista previa** continua de toda la secuencia.
 - **Exportación a MP4** (H.264 + AAC) con [FFmpeg.wasm](https://ffmpegwasm.netlify.app/), en 480p, 720p, 1080p, vertical o cuadrado. Los clips con distinta resolución se ajustan automáticamente.
 
-Atajos: `Espacio` reproducir · `S` dividir · `←/→` fotograma a fotograma (`Mayús`: 1 s) · `Supr` eliminar el clip.
+Atajos: `Espacio` reproducir · `S` dividir en el cursor · `B` cuchilla · `A` selección · `←/→` fotograma a fotograma (`Mayús`: 1 s) · `Supr` eliminar el clip.
 
 ## Uso
 
@@ -24,7 +26,10 @@ npm run build    # versión de producción en dist/
 
 | Archivo | Qué hace |
 | --- | --- |
-| `src/App.tsx` | Estado del proyecto, reproductor de la secuencia, importación y atajos |
+| `src/App.tsx` | Estado del proyecto, distribución de paneles, reproductor de la secuencia y atajos |
+| `src/MediaPool.tsx` · `src/SourceViewer.tsx` | Biblioteca de medios y visor de origen (entrada/salida) |
+| `src/EffectsLibrary.tsx` · `src/Mixer.tsx` | Panel de transiciones y mezclador con medidores |
+| `src/waveform.tsx` · `src/audioEngine.ts` | Formas de onda y enrutado de audio (Web Audio) |
 | `src/Timeline.tsx` | Línea de tiempo: regla, pistas, cursor, zoom y reordenar |
 | `src/Inspector.tsx` | Panel lateral: recorte, volumen y música |
 | `src/ExportDialog.tsx` | Diálogo de exportación y progreso |

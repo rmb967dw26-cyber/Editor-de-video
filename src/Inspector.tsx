@@ -1,3 +1,4 @@
+import { useState, type ReactNode } from 'react'
 import { formatTime } from './media'
 import { clipLength, type Clip, type MusicTrack, type Stinger } from './types'
 
@@ -19,155 +20,215 @@ interface Props {
   onMusicRemove: () => void
 }
 
+type Tab = 'video' | 'audio' | 'transition'
+
 const MIN_LENGTH = 0.1
 
-export function Inspector({
-  clip, index, count, music, stingers, onChange, onRemove, onMove,
-  onApplyTransitionToAll, onAddStingers, onStingerChange, onStingerRemove, onMusicChange, onMusicRemove,
-}: Props) {
-  const isLast = index === count - 1
+/** Fila del inspector: etiqueta, control deslizante y valor. */
+function Param(props: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  display: string
+  disabled?: boolean
+  onChange: (v: number) => void
+}) {
   return (
-    <aside className="inspector">
-      <div className="panel">
-        <h2>Clip</h2>
-        {!clip ? (
-          <p className="muted">Selecciona un clip en la línea de tiempo para recortarlo o ajustar su audio.</p>
-        ) : (
-          <>
-            <p className="filename" title={clip.name}>{clip.name}</p>
-            <p className="muted">
-              Duración: {formatTime(clipLength(clip))} (original {formatTime(clip.duration)})
-            </p>
+    <label className="param">
+      <span className="param-label">{props.label}</span>
+      <input
+        type="range" min={props.min} max={props.max} step={props.step} value={props.value}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(Number(e.target.value))}
+      />
+      <span className="param-value">{props.display}</span>
+    </label>
+  )
+}
 
-            <label className="field">
-              <span>Inicio <b>{formatTime(clip.start)}</b></span>
-              <input
-                type="range" min={0} max={clip.duration} step={0.05} value={clip.start}
-                onChange={(e) => {
-                  const start = Math.min(Number(e.target.value), clip.end - MIN_LENGTH)
-                  onChange({ start }, start)
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Fin <b>{formatTime(clip.end)}</b></span>
-              <input
-                type="range" min={0} max={clip.duration} step={0.05} value={clip.end}
-                onChange={(e) => {
-                  const end = Math.max(Number(e.target.value), clip.start + MIN_LENGTH)
-                  onChange({ end }, end)
-                }}
-              />
-            </label>
-            <button className="small" onClick={() => onChange({ start: 0, end: clip.duration }, 0)}>
-              Restablecer recorte
-            </button>
+function Section({ title, children, enabled }: { title: string; children: ReactNode; enabled?: boolean }) {
+  return (
+    <div className="insp-section">
+      <div className="insp-section-head">
+        <span className={`dot ${enabled === false ? 'off' : ''}`} />
+        {title}
+      </div>
+      {children}
+    </div>
+  )
+}
 
-            <label className="field">
-              <span>Volumen <b>{clip.muted ? 'silenciado' : `${Math.round(clip.volume * 100)}%`}</b></span>
-              <input
-                type="range" min={0} max={1} step={0.01} value={clip.volume} disabled={clip.muted}
-                onChange={(e) => onChange({ volume: Number(e.target.value) })}
-              />
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={clip.muted} onChange={(e) => onChange({ muted: e.target.checked })} />
-              Silenciar audio original
-            </label>
+export function Inspector(props: Props) {
+  const { clip, index, count, music, stingers } = props
+  const [tab, setTab] = useState<Tab>('video')
+  const isLast = index === count - 1
 
-            <label className="field">
-              <span>Transición al siguiente clip</span>
-              <select
-                value={clip.transitionId ?? ''}
-                disabled={isLast || stingers.length === 0}
-                onChange={(e) => onChange({ transitionId: e.target.value || null })}
-              >
-                <option value="">
-                  {isLast ? 'Es el último clip' : stingers.length ? 'Ninguna (corte directo)' : 'Importa transiciones primero'}
-                </option>
-                {stingers.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </label>
-            {stingers.length > 0 && count > 1 && (
-              <button className="small" onClick={() => onApplyTransitionToAll(clip.transitionId ?? stingers[0].id)}>
-                Usar {clip.transitionId ? 'esta transición' : 'la primera transición'} en todos los cortes
-              </button>
-            )}
-
-            <div className="row">
-              <button className="small" disabled={index <= 0} onClick={() => onMove(-1)}>← Mover</button>
-              <button className="small" disabled={index >= count - 1} onClick={() => onMove(1)}>Mover →</button>
-              <button className="small danger" onClick={onRemove}>Eliminar</button>
-            </div>
-          </>
-        )}
+  return (
+    <section className="panel inspector">
+      <header className="panel-head">
+        <span className="panel-title">Inspector</span>
+        <span className="muted small-text insp-clip-name" title={clip?.name}>{clip?.name ?? ''}</span>
+      </header>
+      <div className="insp-tabs" role="tablist">
+        {([
+          ['video', '▣', 'Video'],
+          ['audio', '♪', 'Audio'],
+          ['transition', '⧉', 'Transición'],
+        ] as [Tab, string, string][]).map(([id, icon, label]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={`insp-tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
+            <span className="insp-tab-icon">{icon}</span>
+            {label}
+          </button>
+        ))}
       </div>
 
-      <div className="panel">
-        <h2>Transiciones</h2>
-        {stingers.length === 0 ? (
-          <p className="muted">
-            Importa transiciones tipo <i>stinger</i> en formato WEBM con fondo transparente. Si vienen en un .rar o
-            .zip, descomprímelo primero.
-          </p>
-        ) : (
-          <ul className="stingers">
-            {stingers.map((s) => (
-              <li key={s.id}>
-                <div className="stinger-head">
-                  {s.thumbnail && <img src={s.thumbnail} alt="" />}
-                  <span className="filename" title={s.name}>{s.name}</span>
-                  <button className="small danger" onClick={() => onStingerRemove(s.id)} title="Quitar transición">✕</button>
+      <div className="insp-body">
+        {tab === 'video' &&
+          (!clip ? (
+            <p className="muted insp-empty">Selecciona un clip en la línea de tiempo.</p>
+          ) : (
+            <>
+              <Section title="Recorte">
+                <Param
+                  label="Entrada" min={0} max={clip.duration} step={0.05} value={clip.start} display={formatTime(clip.start)}
+                  onChange={(v) => {
+                    const start = Math.min(v, clip.end - MIN_LENGTH)
+                    props.onChange({ start }, start)
+                  }}
+                />
+                <Param
+                  label="Salida" min={0} max={clip.duration} step={0.05} value={clip.end} display={formatTime(clip.end)}
+                  onChange={(v) => {
+                    const end = Math.max(v, clip.start + MIN_LENGTH)
+                    props.onChange({ end }, end)
+                  }}
+                />
+                <div className="param static">
+                  <span className="param-label">Duración</span>
+                  <span className="param-text">{formatTime(clipLength(clip))} de {formatTime(clip.duration)}</span>
                 </div>
-                <label className="field">
-                  <span>Corte en <b>{formatTime(s.cutPoint)} / {formatTime(s.duration)}</b></span>
-                  <input
-                    type="range" min={0} max={s.duration} step={0.05} value={s.cutPoint}
-                    onChange={(e) => onStingerChange(s.id, { cutPoint: Number(e.target.value) })}
-                  />
-                </label>
-              </li>
-            ))}
-          </ul>
-        )}
-        <button className="small" onClick={onAddStingers}>＋ Importar transiciones</button>
-      </div>
+                <div className="insp-actions">
+                  <button className="small" onClick={() => props.onChange({ start: 0, end: clip.duration }, 0)}>Restablecer</button>
+                </div>
+              </Section>
+              <Section title="Posición">
+                <div className="insp-actions">
+                  <button className="small" disabled={index <= 0} onClick={() => props.onMove(-1)}>← Mover</button>
+                  <button className="small" disabled={isLast} onClick={() => props.onMove(1)}>Mover →</button>
+                  <button className="small danger" onClick={props.onRemove}>Eliminar clip</button>
+                </div>
+              </Section>
+            </>
+          ))}
 
-      <div className="panel">
-        <h2>Música</h2>
-        {!music ? (
-          <p className="muted">Añade una canción (MP3, WAV, M4A…) para ponerla de fondo.</p>
-        ) : (
+        {tab === 'audio' && (
           <>
-            <p className="filename" title={music.name}>♪ {music.name}</p>
-            <label className="field">
-              <span>Empezar la canción en <b>{formatTime(music.offset)}</b></span>
-              <input
-                type="range" min={0} max={Math.max(0, music.duration - 1)} step={0.1} value={music.offset}
-                onChange={(e) => onMusicChange({ offset: Number(e.target.value) })}
-              />
-            </label>
-            <label className="field">
-              <span>Volumen <b>{Math.round(music.volume * 100)}%</b></span>
-              <input
-                type="range" min={0} max={1} step={0.01} value={music.volume}
-                onChange={(e) => onMusicChange({ volume: Number(e.target.value) })}
-              />
-            </label>
-            <label className="check">
-              <input type="checkbox" checked={music.fadeOut} onChange={(e) => onMusicChange({ fadeOut: e.target.checked })} />
-              Fundido de salida al final (2 s)
-            </label>
-            <button className="small danger" onClick={onMusicRemove}>Quitar música</button>
+            {clip ? (
+              <Section title="Audio del clip" enabled={!clip.muted}>
+                <Param
+                  label="Volumen" min={0} max={1} step={0.01} value={clip.volume} disabled={clip.muted}
+                  display={clip.muted ? '—' : `${Math.round(clip.volume * 100)}%`}
+                  onChange={(v) => props.onChange({ volume: v })}
+                />
+                <label className="check">
+                  <input type="checkbox" checked={clip.muted} onChange={(e) => props.onChange({ muted: e.target.checked })} />
+                  Silenciar audio original
+                </label>
+              </Section>
+            ) : (
+              <p className="muted insp-empty">Selecciona un clip para ajustar su audio.</p>
+            )}
+            <Section title="Música de fondo" enabled={!!music}>
+              {!music ? (
+                <p className="muted small-text">Haz doble clic en un audio de la biblioteca para usarlo como música.</p>
+              ) : (
+                <>
+                  <div className="param static">
+                    <span className="param-label">Archivo</span>
+                    <span className="param-text" title={music.name}>{music.name}</span>
+                  </div>
+                  <Param
+                    label="Empezar en" min={0} max={Math.max(0, music.duration - 1)} step={0.1} value={music.offset}
+                    display={formatTime(music.offset)} onChange={(v) => props.onMusicChange({ offset: v })}
+                  />
+                  <Param
+                    label="Volumen" min={0} max={1} step={0.01} value={music.volume}
+                    display={`${Math.round(music.volume * 100)}%`} onChange={(v) => props.onMusicChange({ volume: v })}
+                  />
+                  <label className="check">
+                    <input type="checkbox" checked={music.fadeOut} onChange={(e) => props.onMusicChange({ fadeOut: e.target.checked })} />
+                    Fundido de salida al final (2 s)
+                  </label>
+                  <div className="insp-actions">
+                    <button className="small danger" onClick={props.onMusicRemove}>Quitar música</button>
+                  </div>
+                </>
+              )}
+            </Section>
+          </>
+        )}
+
+        {tab === 'transition' && (
+          <>
+            <Section title="Transición al siguiente clip" enabled={!!clip?.transitionId}>
+              {!clip ? (
+                <p className="muted small-text">Selecciona un clip en la línea de tiempo.</p>
+              ) : (
+                <>
+                  <label className="param">
+                    <span className="param-label">Tipo</span>
+                    <select
+                      value={clip.transitionId ?? ''}
+                      disabled={isLast || stingers.length === 0}
+                      onChange={(e) => props.onChange({ transitionId: e.target.value || null })}
+                      aria-label="Transición al siguiente clip"
+                    >
+                      <option value="">
+                        {isLast ? 'Es el último clip' : stingers.length ? 'Corte directo' : 'Importa transiciones primero'}
+                      </option>
+                      {stingers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {stingers.length > 0 && count > 1 && (
+                    <div className="insp-actions">
+                      <button className="small" onClick={() => props.onApplyTransitionToAll(clip.transitionId ?? stingers[0].id)}>
+                        Usar {clip.transitionId ? 'esta' : 'la primera'} en todos los cortes
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </Section>
+            <Section title="Transiciones importadas">
+              {stingers.length === 0 && (
+                <p className="muted small-text">
+                  Importa transiciones <i>stinger</i> en WEBM con fondo transparente (descomprime antes el .rar o .zip).
+                </p>
+              )}
+              {stingers.map((s) => (
+                <div key={s.id} className="stinger-row">
+                  <div className="stinger-head">
+                    {s.thumbnail && <img src={s.thumbnail} alt="" />}
+                    <span className="param-text" title={s.name}>{s.name}</span>
+                    <button className="icon-btn ghost" onClick={() => props.onStingerRemove(s.id)} title="Quitar transición">✕</button>
+                  </div>
+                  <Param
+                    label="Corte en" min={0} max={s.duration} step={0.05} value={s.cutPoint}
+                    display={formatTime(s.cutPoint)} onChange={(v) => props.onStingerChange(s.id, { cutPoint: v })}
+                  />
+                </div>
+              ))}
+              <div className="insp-actions">
+                <button className="small" onClick={props.onAddStingers}>＋ Importar transiciones</button>
+              </div>
+            </Section>
           </>
         )}
       </div>
-
-      <div className="panel shortcuts muted">
-        <b>Atajos:</b> Espacio reproducir · S dividir · ←/→ fotograma (Mayús: 1 s) · Supr eliminar
-      </div>
-    </aside>
+    </section>
   )
 }
