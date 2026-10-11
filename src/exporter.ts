@@ -124,7 +124,8 @@ export async function exportProject(
 
     // 2. Une los segmentos sin recodificar.
     cb.onStage('Uniendo clips…')
-    const needsFinalPass = !!music || transitions.length > 0
+    const master = Math.max(0, settings.masterVolume)
+    const needsFinalPass = !!music || transitions.length > 0 || Math.abs(master - 1) > 0.001
     stepBase = segmentShare
     stepWeight = needsFinalPass ? 0.02 : 1 - segmentShare
     await ffmpeg.writeFile('list.txt', segments.map((s) => `file '${s}'`).join('\n'))
@@ -140,7 +141,9 @@ export async function exportProject(
       cb.onStage(
         transitions.length
           ? `Aplicando ${transitions.length} transición(es)${music ? ' y la música' : ''}…`
-          : 'Mezclando la música…',
+          : music
+            ? 'Mezclando la música…'
+            : 'Ajustando el volumen general…',
       )
       stepBase = segmentShare + 0.02
       stepWeight = 1 - stepBase
@@ -203,23 +206,29 @@ export async function exportProject(
 
       const filters = [...videoFilters]
       if (videoFilters.length) filters.push(`${lastVideo}format=yuv420p[vout]`)
+      // Mezcla de todas las fuentes y, al final, el fader del máster.
+      const masterFilter = Math.abs(master - 1) > 0.001 ? `volume=${n(master)}` : ''
+      const mixAudio = audioLabels.length > 1 || masterFilter !== ''
       if (audioLabels.length > 1) {
         filters.push(
           ...audioFilters,
-          `${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0:normalize=0[aout]`,
+          `${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0:normalize=0` +
+            `${masterFilter ? ',' + masterFilter : ''}[aout]`,
         )
+      } else if (masterFilter) {
+        filters.push(`[0:a]${masterFilter}[aout]`)
       }
       if (filters.length) args.push('-filter_complex', filters.join(';'))
       args.push('-map', videoFilters.length ? '[vout]' : '0:v')
-      args.push('-map', audioLabels.length > 1 ? '[aout]' : '0:a')
+      args.push('-map', mixAudio ? '[aout]' : '0:a')
       args.push(
         ...(videoFilters.length ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23'] : ['-c:v', 'copy']),
-        ...(audioLabels.length > 1 ? ['-c:a', 'aac', '-b:a', '160k'] : ['-c:a', 'copy']),
+        ...(mixAudio ? ['-c:a', 'aac', '-b:a', '160k'] : ['-c:a', 'copy']),
         '-t', n(totalDuration),
         '-movflags', '+faststart',
         'output.mp4',
       )
-      await run(args, transitions.length ? 'aplicar las transiciones' : 'mezclar la música')
+      await run(args, transitions.length ? 'aplicar las transiciones' : 'mezclar el audio')
 
       for (const f of written) await ffmpeg.deleteFile(f)
       if (music) await ffmpeg.deleteFile('music')

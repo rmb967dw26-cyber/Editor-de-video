@@ -16,6 +16,8 @@ class AudioEngine {
   private ctx: AudioContext | null = null
   private buses = new Map<Bus, BusNodes>()
   private master: AnalyserNode | null = null
+  private masterGain: GainNode | null = null
+  private masterVolume = 1
   private elements: [HTMLMediaElement, Bus][] = []
   private connected = new WeakSet<HTMLMediaElement>()
   private gains: Record<Bus, number> = { a1: 1, a2: 1, fx: 1 }
@@ -39,8 +41,12 @@ class AudioEngine {
     }
     try {
       const ctx = new AudioContext()
+      // Pistas → fader del máster → medidor del máster → altavoces.
+      const masterGain = ctx.createGain()
+      masterGain.gain.value = this.masterVolume
       const master = ctx.createAnalyser()
       master.fftSize = 1024
+      masterGain.connect(master)
       master.connect(ctx.destination)
       for (const bus of ['a1', 'a2', 'fx'] as Bus[]) {
         const gain = ctx.createGain()
@@ -48,11 +54,12 @@ class AudioEngine {
         const analyser = ctx.createAnalyser()
         analyser.fftSize = 1024
         gain.connect(analyser)
-        analyser.connect(master)
+        analyser.connect(masterGain)
         this.buses.set(bus, { gain, analyser })
       }
       this.ctx = ctx
       this.master = master
+      this.masterGain = masterGain
       for (const [el, bus] of this.elements) this.connect(el, bus)
     } catch {
       this.ctx = null
@@ -72,7 +79,17 @@ class AudioEngine {
     this.gains[bus] = value
     const nodes = this.buses.get(bus)
     if (nodes && this.ctx) nodes.gain.gain.setTargetAtTime(value, this.ctx.currentTime, 0.01)
-    else if (el) el.volume = Math.max(0, Math.min(1, value))
+    else if (el) el.volume = clamp01(value * this.masterVolume)
+  }
+
+  /** Fader del máster: afecta a todas las pistas. */
+  setMasterVolume(value: number) {
+    this.masterVolume = value
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setTargetAtTime(value, this.ctx.currentTime, 0.01)
+    } else {
+      for (const [el, bus] of this.elements) el.volume = clamp01(this.gains[bus] * value)
+    }
   }
 
   /** Pico actual (0–1) de una pista o del máster. */
@@ -88,5 +105,7 @@ class AudioEngine {
     return peak
   }
 }
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
 
 export const audioEngine = new AudioEngine()

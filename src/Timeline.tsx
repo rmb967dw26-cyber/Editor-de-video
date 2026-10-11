@@ -1,11 +1,49 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatTime, formatTimecode } from './media'
-import { clipLength, type Clip, type MusicTrack, type PlacedTransition } from './types'
+import { clipLength, type Clip, type MusicTrack, type PlacedTransition, type TrackId, type TrackNames } from './types'
 import { Waveform } from './waveform'
 import { MEDIA_DRAG_TYPE } from './MediaPool'
 import { STINGER_DRAG_TYPE } from './EffectsLibrary'
 
 export type Tool = 'select' | 'blade'
+
+/** Nombre de pista editable: doble clic para cambiarlo, Intro para guardar, Esc para cancelar. */
+function TrackName({ name, onRename }: { name: string; onRename: (name: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  if (editing) {
+    return (
+      <input
+        className="track-name-input"
+        defaultValue={name}
+        autoFocus
+        maxLength={40}
+        aria-label="Nombre de la pista"
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={(e) => {
+          onRename(e.currentTarget.value)
+          setEditing(false)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+          if (e.key === 'Escape') setEditing(false)
+        }}
+      />
+    )
+  }
+  return (
+    <span
+      className="track-name"
+      title="Doble clic para cambiar el nombre"
+      tabIndex={0}
+      onDoubleClick={() => setEditing(true)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === 'F2') setEditing(true)
+      }}
+    >
+      {name}
+    </span>
+  )
+}
 
 interface Props {
   clips: Clip[]
@@ -16,6 +54,8 @@ interface Props {
   transitions: PlacedTransition[]
   selectedId: string | null
   tool: Tool
+  trackNames: TrackNames
+  onRenameTrack: (track: TrackId, name: string) => void
   a1Muted: boolean
   a2Muted: boolean
   onToolChange: (tool: Tool) => void
@@ -131,7 +171,7 @@ export function Timeline(props: Props) {
           <div className="lane v-lane">
             <div className="track-head">
               <span className="track-id v">V1</span>
-              <span className="track-name">Video 1</span>
+              <TrackName name={props.trackNames.v1} onRename={(n) => props.onRenameTrack('v1', n)} />
             </div>
             <div
               className="track"
@@ -221,7 +261,7 @@ export function Timeline(props: Props) {
           <div className="lane a-lane">
             <div className="track-head">
               <span className="track-id a">A1</span>
-              <span className="track-name">Audio 1</span>
+              <TrackName name={props.trackNames.a1} onRename={(n) => props.onRenameTrack('a1', n)} />
               <button className={`mute-btn ${props.a1Muted ? 'on' : ''}`} onClick={() => props.onToggleMute('a1')} title="Silenciar pista">M</button>
             </div>
             <div className={`track ${props.a1Muted ? 'muted-track' : ''}`} style={{ width: contentWidth }}>
@@ -243,7 +283,7 @@ export function Timeline(props: Props) {
           <div className="lane a-lane">
             <div className="track-head">
               <span className="track-id a">A2</span>
-              <span className="track-name">Música</span>
+              <TrackName name={props.trackNames.a2} onRename={(n) => props.onRenameTrack('a2', n)} />
               <button className={`mute-btn ${props.a2Muted ? 'on' : ''}`} onClick={() => props.onToggleMute('a2')} title="Silenciar pista">M</button>
             </div>
             <div

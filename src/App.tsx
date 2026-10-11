@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { captureThumbnail, formatTimecode, newId, readDuration } from './media'
-import { clipLength, placeTransitions, type Clip, type MediaItem, type MusicTrack, type Stinger } from './types'
+import {
+  clipLength, DEFAULT_TRACK_NAMES, placeTransitions,
+  type Clip, type MediaItem, type MusicTrack, type Stinger, type TrackId, type TrackNames,
+} from './types'
 import { Timeline, type Tool } from './Timeline'
 import { Inspector } from './Inspector'
 import { ExportDialog } from './ExportDialog'
@@ -13,6 +16,19 @@ import { audioEngine } from './audioEngine'
 const isAudioFile = (f: File) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)
 const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)
 const isWide = () => typeof window === 'undefined' || window.matchMedia('(min-width: 1100px)').matches
+
+const TRACK_NAMES_KEY = 'editor-video:track-names'
+
+/** Nombres de pista guardados en este navegador (si el almacenamiento está disponible). */
+function loadTrackNames(): TrackNames {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TRACK_NAMES_KEY) ?? 'null')
+    if (saved && typeof saved === 'object') return { ...DEFAULT_TRACK_NAMES, ...saved }
+  } catch {
+    // Sin acceso al almacenamiento: se usan los nombres por defecto.
+  }
+  return DEFAULT_TRACK_NAMES
+}
 
 const clipFromMedia = (item: MediaItem, start = 0, end = item.duration): Clip => ({
   id: newId(), file: item.file, url: item.url, name: item.name, duration: item.duration,
@@ -28,6 +44,9 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('select')
   const [a1, setA1] = useState({ gain: 1, muted: false })
   const [a2Muted, setA2Muted] = useState(false)
+  const [master, setMaster] = useState({ gain: 1, muted: false })
+  const [trackNames, setTrackNames] = useState<TrackNames>(loadTrackNames)
+  const masterVolume = master.muted ? 0 : master.gain
   const [panels, setPanels] = useState(() => ({ pool: true, effects: true, inspector: true, mixer: isWide(), source: isWide() }))
   const togglePanel = (k: keyof typeof panels) => setPanels((p) => ({ ...p, [k]: !p[k] }))
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -235,6 +254,22 @@ export default function App() {
     syncMusic(time, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [music, a2Muted])
+
+  useEffect(() => {
+    audioEngine.setMasterVolume(masterVolume)
+  }, [masterVolume])
+
+  const renameTrack = (track: TrackId, name: string) => {
+    setTrackNames((names) => {
+      const next = { ...names, [track]: name.trim() || DEFAULT_TRACK_NAMES[track] }
+      try {
+        localStorage.setItem(TRACK_NAMES_KEY, JSON.stringify(next))
+      } catch {
+        // No se pudo guardar; el cambio vale para esta sesión.
+      }
+      return next
+    })
+  }
 
   // Conecta los elementos de la vista previa al motor de audio (medidores y volumen por pista).
   useEffect(() => {
@@ -548,6 +583,8 @@ export default function App() {
           transitions={transitions}
           selectedId={selectedId}
           tool={tool}
+          trackNames={trackNames}
+          onRenameTrack={renameTrack}
           a1Muted={a1.muted}
           a2Muted={a2Muted}
           onToolChange={setTool}
@@ -585,16 +622,20 @@ export default function App() {
           <Mixer
             strips={[
               {
-                id: 'a1', label: 'A1', value: a1.gain, muted: a1.muted,
+                id: 'a1', label: 'A1', name: trackNames.a1, value: a1.gain, muted: a1.muted,
                 onChange: (gain) => setA1((a) => ({ ...a, gain })),
                 onMute: () => setA1((a) => ({ ...a, muted: !a.muted })),
               },
               {
-                id: 'a2', label: 'A2', value: music?.volume ?? 0, muted: a2Muted, disabled: !music,
+                id: 'a2', label: 'A2', name: trackNames.a2, value: music?.volume ?? 0, muted: a2Muted, disabled: !music,
                 onChange: (volume) => setMusic((m) => (m ? { ...m, volume } : m)),
                 onMute: () => setA2Muted((m) => !m),
               },
-              { id: 'master', label: 'Bus 1' },
+              {
+                id: 'master', label: 'Máster', name: 'Salida', value: master.gain, muted: master.muted,
+                onChange: (gain) => setMaster((m) => ({ ...m, gain })),
+                onMute: () => setMaster((m) => ({ ...m, muted: !m.muted })),
+              },
             ]}
           />
         )}
@@ -621,6 +662,7 @@ export default function App() {
           music={a2Muted ? null : music}
           transitions={transitions}
           total={total}
+          masterVolume={masterVolume}
           onClose={() => setShowExport(false)}
         />
       )}

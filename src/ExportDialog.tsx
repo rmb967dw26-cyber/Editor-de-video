@@ -16,12 +16,13 @@ interface Props {
   music: MusicTrack | null
   transitions: PlacedTransition[]
   total: number
+  masterVolume: number
   onClose: () => void
 }
 
 type Status = 'idle' | 'running' | 'done' | 'error'
 
-export function ExportDialog({ clips, music, transitions, total, onClose }: Props) {
+export function ExportDialog({ clips, music, transitions, total, masterVolume, onClose }: Props) {
   const [preset, setPreset] = useState(0)
   const [status, setStatus] = useState<Status>('idle')
   const [stage, setStage] = useState('')
@@ -50,7 +51,7 @@ export function ExportDialog({ clips, music, transitions, total, onClose }: Prop
     setError('')
     try {
       const { width, height } = PRESETS[preset]
-      const blob = await exportProject(clips, music, transitions, { width, height }, {
+      const blob = await exportProject(clips, music, transitions, { width, height, masterVolume }, {
         onStage: setStage,
         onProgress: setProgress,
       })

@@ -12,6 +12,8 @@ Interfaz de editor profesional: biblioteca de medios, visor de origen y de progr
 - **Vista previa** continua de toda la secuencia.
 - **Exportación a MP4** (H.264 + AAC) con [FFmpeg.wasm](https://ffmpegwasm.netlify.app/), en 480p, 720p, 1080p, vertical o cuadrado. Los clips con distinta resolución se ajustan automáticamente.
 
+Doble clic en el nombre de una pista para cambiarlo. El fader del máster ajusta el volumen general (también al exportar).
+
 Atajos: `Espacio` reproducir · `S` dividir en el cursor · `B` cuchilla · `A` selección · `←/→` fotograma a fotograma (`Mayús`: 1 s) · `Supr` eliminar el clip.
 
 ## Uso

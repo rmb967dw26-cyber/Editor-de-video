@@ -4,6 +4,8 @@ import { audioEngine, type Bus } from './audioEngine'
 interface Strip {
   id: Bus | 'master'
   label: string
+  /** Nombre de la pista, mostrado bajo la etiqueta. */
+  name?: string
   value?: number
   muted?: boolean
   disabled?: boolean
@@ -43,6 +45,7 @@ export function Mixer({ strips }: { strips: Strip[] }) {
         {strips.map((s) => (
           <div key={s.id} className={`strip ${s.disabled ? 'disabled' : ''}`}>
             <div className="strip-label">{s.label}</div>
+            <div className="strip-name" title={s.name}>{s.name}</div>
             <div className="strip-body">
               <div className="meter">
                 <div
@@ -65,11 +68,9 @@ export function Mixer({ strips }: { strips: Strip[] }) {
                 <div className="fader-spacer" />
               )}
             </div>
-            <div className="strip-value">
-              {s.value !== undefined ? `${Math.round(s.value * 100)}%` : 'Máster'}
-            </div>
+            <div className="strip-value">{s.muted ? 'Mute' : `${Math.round((s.value ?? 1) * 100)}%`}</div>
             {s.onMute && (
-              <button className={`mute-btn ${s.muted ? 'on' : ''}`} onClick={s.onMute} disabled={s.disabled} title="Silenciar pista">
+              <button className={`mute-btn ${s.muted ? 'on' : ''}`} onClick={s.onMute} disabled={s.disabled} title={s.id === 'master' ? 'Silenciar todo' : 'Silenciar pista'}>
                 M
               </button>
             )}

@@ -248,12 +248,17 @@ select {
 .track-id { font-size: 11px; font-weight: 700; padding: 1px 5px; border-radius: 3px; }
 .track-id.v { background: #24364d; color: #9cc3ef; }
 .track-id.a { background: #1f3b2c; color: #93dcb2; }
-.track-name { font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.track-name { font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-radius: 2px; padding: 1px 2px; }
+.track-name:hover { background: #2e2e34; }
+.track-name-input {
+  flex: 1; min-width: 0; font: inherit; font-size: 12px; padding: 1px 3px; color: var(--text);
+  background: var(--field); border: 1px solid var(--accent); border-radius: 2px;
+}
 .mute-btn {
   padding: 0 5px; font-size: 10px; font-weight: 700; height: 18px; border-radius: 3px;
   background: #2b2b31; color: var(--muted); border-color: #3a3a41;
 }
-.mute-btn.on { background: #c94f4f; color: #fff; border-color: #c94f4f; }
+.mute-btn.on, .mute-btn.on:hover:not(:disabled) { background: #c94f4f; color: #fff; border-color: #c94f4f; }
 .ruler { position: relative; height: 26px; cursor: col-resize; touch-action: none; background: #1d1d21; }
 .tick {
   position: absolute; top: 0; height: 100%; border-left: 1px solid #3a3a42;
@@ -308,6 +313,7 @@ select {
 .strip { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 48px; min-height: 0; }
 .strip.disabled { opacity: 0.45; }
 .strip-label { font-size: 11px; font-weight: 600; background: #2a2a30; border-radius: 3px; padding: 1px 6px; }
+.strip-name { font-size: 9px; color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .strip-body { flex: 1; display: flex; gap: 3px; min-height: 60px; align-items: stretch; }
 .meter { width: 7px; background: #0e0e10; border-radius: 1px; position: relative; overflow: hidden; }
 .meter-fill {
