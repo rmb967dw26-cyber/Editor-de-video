@@ -12,6 +12,7 @@ import { SourceViewer } from './SourceViewer'
 import { EffectsLibrary } from './EffectsLibrary'
 import { Mixer } from './Mixer'
 import { audioEngine } from './audioEngine'
+import { useUndoHistory } from './useUndoHistory'
 
 const isAudioFile = (f: File) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)
 const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)
@@ -260,16 +261,35 @@ export default function App() {
   }, [masterVolume])
 
   const renameTrack = (track: TrackId, name: string) => {
-    setTrackNames((names) => {
-      const next = { ...names, [track]: name.trim() || DEFAULT_TRACK_NAMES[track] }
-      try {
-        localStorage.setItem(TRACK_NAMES_KEY, JSON.stringify(next))
-      } catch {
-        // No se pudo guardar; el cambio vale para esta sesión.
-      }
-      return next
-    })
+    setTrackNames((names) => ({ ...names, [track]: name.trim() || DEFAULT_TRACK_NAMES[track] }))
   }
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TRACK_NAMES_KEY, JSON.stringify(trackNames))
+    } catch {
+      // No se pudo guardar; el cambio vale para esta sesión.
+    }
+  }, [trackNames])
+
+  // ---- Deshacer / rehacer ----
+  // Todo lo que forma parte del montaje. La biblioteca de medios no entra: importar
+  // un archivo no se deshace, pero sí el clip que se añade a la línea de tiempo.
+  const project = useMemo(
+    () => ({ clips, music, stingers, a1, a2Muted, master, trackNames }),
+    [clips, music, stingers, a1, a2Muted, master, trackNames],
+  )
+  const restoreProject = useCallback((p: typeof project) => {
+    setPlaying(false)
+    setClips(p.clips)
+    setMusic(p.music)
+    setStingers(p.stingers)
+    setA1(p.a1)
+    setA2Muted(p.a2Muted)
+    setMaster(p.master)
+    setTrackNames(p.trackNames)
+  }, [])
+  const history = useUndoHistory(project, restoreProject)
 
   // Conecta los elementos de la vista previa al motor de audio (medidores y volumen por pista).
   useEffect(() => {
@@ -350,11 +370,8 @@ export default function App() {
   }, [])
 
   const removeStinger = useCallback((id: string) => {
-    setStingers((ss) => {
-      const s = ss.find((x) => x.id === id)
-      if (s) URL.revokeObjectURL(s.url)
-      return ss.filter((x) => x.id !== id)
-    })
+    // La URL no se libera: deshacer puede volver a necesitar la transición.
+    setStingers((ss) => ss.filter((x) => x.id !== id))
     setClips((cs) => cs.map((c) => (c.transitionId === id ? { ...c, transitionId: null } : c)))
   }, [])
 
@@ -403,8 +420,25 @@ export default function App() {
   // Atajos de teclado.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || showExport) return
+      const target = e.target as HTMLElement
+      const tag = target.tagName
+      if (showExport) return
+      if (e.ctrlKey || e.metaKey) {
+        // Al escribir un nombre, Ctrl+Z deshace el texto del campo, no el montaje.
+        const typing = tag === 'TEXTAREA' || (target instanceof HTMLInputElement && !['range', 'checkbox'].includes(target.type))
+        const key = e.key.toLowerCase()
+        if (typing) return
+        if (key === 'z') {
+          e.preventDefault()
+          if (e.shiftKey) history.redo()
+          else history.undo()
+        } else if (key === 'y') {
+          e.preventDefault()
+          history.redo()
+        }
+        return
+      }
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
       if (e.code === 'Space') {
         e.preventDefault()
         togglePlay()
@@ -424,7 +458,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, splitAt, removeClip, selectedId, seek, time, showExport])
+  }, [togglePlay, splitAt, removeClip, selectedId, seek, time, showExport, history])
 
   const selectedIndex = clips.findIndex((c) => c.id === selectedId)
   const selected = selectedIndex >= 0 ? clips[selectedIndex] : null
@@ -457,6 +491,13 @@ export default function App() {
     >
       <header className="topbar">
         <div className="topbar-group">
+          <button className="top-btn undo-btn" onClick={history.undo} disabled={!history.canUndo} title="Deshacer (Ctrl+Z)" aria-label="Deshacer">
+            ↶
+          </button>
+          <button className="top-btn undo-btn" onClick={history.redo} disabled={!history.canRedo} title="Rehacer (Ctrl+Mayús+Z)" aria-label="Rehacer">
+            ↷
+          </button>
+          <span className="top-sep" />
           <button className={`top-btn ${panels.pool ? 'on' : ''}`} onClick={() => togglePanel('pool')}>▤ Medios</button>
           <button className={`top-btn ${panels.effects ? 'on' : ''}`} onClick={() => togglePanel('effects')}>✦ Efectos</button>
           <button className={`top-btn hide-narrow ${panels.source ? 'on' : ''}`} onClick={() => togglePanel('source')}>◫ Visor doble</button>

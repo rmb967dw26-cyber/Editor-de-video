@@ -14,6 +14,8 @@ Interfaz de editor profesional: biblioteca de medios, visor de origen y de progr
 
 Doble clic en el nombre de una pista para cambiarlo. El fader del máster ajusta el volumen general (también al exportar).
 
+Deshacer y rehacer con los botones ↶ ↷ de la barra superior o con `Ctrl+Z` / `Ctrl+Mayús+Z` (`Ctrl+Y`).
+
 Atajos: `Espacio` reproducir · `S` dividir en el cursor · `B` cuchilla · `A` selección · `←/→` fotograma a fotograma (`Mayús`: 1 s) · `Supr` eliminar el clip.
 
 ## Uso
