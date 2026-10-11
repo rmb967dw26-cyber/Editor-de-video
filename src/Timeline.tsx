@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { formatTime } from './media'
-import { clipLength, type Clip, type MusicTrack } from './types'
+import { clipLength, type Clip, type MusicTrack, type PlacedTransition } from './types'
 
 interface Props {
   clips: Clip[]
@@ -8,6 +8,7 @@ interface Props {
   total: number
   time: number
   music: MusicTrack | null
+  transitions: PlacedTransition[]
   selectedId: string | null
   onSelect: (id: string) => void
   onSeek: (t: number) => void
@@ -16,7 +17,7 @@ interface Props {
 
 const LABEL_WIDTH = 72
 
-export function Timeline({ clips, starts, total, time, music, selectedId, onSelect, onSeek, onMove }: Props) {
+export function Timeline({ clips, starts, total, time, music, transitions, selectedId, onSelect, onSeek, onMove }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
   // null = ajustar todo el proyecto al ancho disponible.
@@ -146,6 +147,16 @@ export function Timeline({ clips, starts, total, time, music, selectedId, onSele
                     {clip.muted && '🔇 '}
                     {clip.name}
                   </span>
+                </div>
+              ))}
+              {transitions.map((tr) => (
+                <div
+                  key={tr.clipIndex}
+                  className="transition"
+                  style={{ left: tr.start * pxPerSec, width: tr.stinger.duration * pxPerSec }}
+                  title={`Transición: ${tr.stinger.name}`}
+                >
+                  <span className="transition-cut" style={{ left: tr.stinger.cutPoint * pxPerSec }}>✦</span>
                 </div>
               ))}
             </div>

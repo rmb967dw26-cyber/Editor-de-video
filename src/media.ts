@@ -15,7 +15,7 @@ export function readDuration(url: string, kind: 'video' | 'audio'): Promise<numb
 }
 
 /** Captura un fotograma del video para usarlo como miniatura. */
-export function captureThumbnail(url: string, at: number): Promise<string | null> {
+export function captureThumbnail(url: string, at: number, type = 'image/jpeg'): Promise<string | null> {
   return new Promise((resolve) => {
     const video = document.createElement('video')
     video.muted = true
@@ -37,7 +37,7 @@ export function captureThumbnail(url: string, at: number): Promise<string | null
       const ctx = canvas.getContext('2d')
       if (!ctx) return done(null)
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      done(canvas.toDataURL('image/jpeg', 0.7))
+      done(canvas.toDataURL(type, 0.7))
     }
     video.onerror = () => done(null)
     video.src = url

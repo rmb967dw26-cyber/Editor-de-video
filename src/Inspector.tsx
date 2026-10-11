@@ -1,22 +1,31 @@
 import { formatTime } from './media'
-import { clipLength, type Clip, type MusicTrack } from './types'
+import { clipLength, type Clip, type MusicTrack, type Stinger } from './types'
 
 interface Props {
   clip: Clip | null
   index: number
   count: number
   music: MusicTrack | null
+  stingers: Stinger[]
   /** `previewAt`: segundo del archivo original que mostrar en la vista previa. */
   onChange: (patch: Partial<Clip>, previewAt?: number) => void
   onRemove: () => void
   onMove: (dir: -1 | 1) => void
+  onApplyTransitionToAll: (stingerId: string | null) => void
+  onAddStingers: () => void
+  onStingerChange: (id: string, patch: Partial<Stinger>) => void
+  onStingerRemove: (id: string) => void
   onMusicChange: (patch: Partial<MusicTrack>) => void
   onMusicRemove: () => void
 }
 
 const MIN_LENGTH = 0.1
 
-export function Inspector({ clip, index, count, music, onChange, onRemove, onMove, onMusicChange, onMusicRemove }: Props) {
+export function Inspector({
+  clip, index, count, music, stingers, onChange, onRemove, onMove,
+  onApplyTransitionToAll, onAddStingers, onStingerChange, onStingerRemove, onMusicChange, onMusicRemove,
+}: Props) {
+  const isLast = index === count - 1
   return (
     <aside className="inspector">
       <div className="panel">
@@ -66,6 +75,27 @@ export function Inspector({ clip, index, count, music, onChange, onRemove, onMov
               Silenciar audio original
             </label>
 
+            <label className="field">
+              <span>Transición al siguiente clip</span>
+              <select
+                value={clip.transitionId ?? ''}
+                disabled={isLast || stingers.length === 0}
+                onChange={(e) => onChange({ transitionId: e.target.value || null })}
+              >
+                <option value="">
+                  {isLast ? 'Es el último clip' : stingers.length ? 'Ninguna (corte directo)' : 'Importa transiciones primero'}
+                </option>
+                {stingers.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+            {stingers.length > 0 && count > 1 && (
+              <button className="small" onClick={() => onApplyTransitionToAll(clip.transitionId ?? stingers[0].id)}>
+                Usar {clip.transitionId ? 'esta transición' : 'la primera transición'} en todos los cortes
+              </button>
+            )}
+
             <div className="row">
               <button className="small" disabled={index <= 0} onClick={() => onMove(-1)}>← Mover</button>
               <button className="small" disabled={index >= count - 1} onClick={() => onMove(1)}>Mover →</button>
@@ -73,6 +103,36 @@ export function Inspector({ clip, index, count, music, onChange, onRemove, onMov
             </div>
           </>
         )}
+      </div>
+
+      <div className="panel">
+        <h2>Transiciones</h2>
+        {stingers.length === 0 ? (
+          <p className="muted">
+            Importa transiciones tipo <i>stinger</i> en formato WEBM con fondo transparente. Si vienen en un .rar o
+            .zip, descomprímelo primero.
+          </p>
+        ) : (
+          <ul className="stingers">
+            {stingers.map((s) => (
+              <li key={s.id}>
+                <div className="stinger-head">
+                  {s.thumbnail && <img src={s.thumbnail} alt="" />}
+                  <span className="filename" title={s.name}>{s.name}</span>
+                  <button className="small danger" onClick={() => onStingerRemove(s.id)} title="Quitar transición">✕</button>
+                </div>
+                <label className="field">
+                  <span>Corte en <b>{formatTime(s.cutPoint)} / {formatTime(s.duration)}</b></span>
+                  <input
+                    type="range" min={0} max={s.duration} step={0.05} value={s.cutPoint}
+                    onChange={(e) => onStingerChange(s.id, { cutPoint: Number(e.target.value) })}
+                  />
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button className="small" onClick={onAddStingers}>＋ Importar transiciones</button>
       </div>
 
       <div className="panel">

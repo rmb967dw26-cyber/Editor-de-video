@@ -2,7 +2,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
 import coreURL from '@ffmpeg/core?url'
 import wasmURL from '@ffmpeg/core/wasm?url'
-import { clipLength, type Clip, type ExportSettings, type MusicTrack } from './types'
+import { clipLength, type Clip, type ExportSettings, type MusicTrack, type PlacedTransition } from './types'
 
 let instance: FFmpeg | null = null
 let loading: Promise<FFmpeg> | null = null
@@ -43,6 +43,7 @@ const n = (x: number) => x.toFixed(3)
 export async function exportProject(
   clips: Clip[],
   music: MusicTrack | null,
+  transitions: PlacedTransition[],
   settings: ExportSettings,
   cb: ExportCallbacks,
 ): Promise<Blob> {
@@ -75,7 +76,8 @@ export async function exportProject(
   }
 
   const totalDuration = clips.reduce((t, c) => t + clipLength(c), 0)
-  const segmentShare = music ? 0.9 : 0.97
+  // Reparto aproximado de la barra de progreso entre las fases.
+  const segmentShare = transitions.length ? 0.6 : music ? 0.9 : 0.97
   const { width: W, height: H } = settings
   const segments: string[] = []
 
@@ -122,42 +124,105 @@ export async function exportProject(
 
     // 2. Une los segmentos sin recodificar.
     cb.onStage('Uniendo clips…')
+    const needsFinalPass = !!music || transitions.length > 0
     stepBase = segmentShare
-    stepWeight = music ? 0.02 : 1 - segmentShare
+    stepWeight = needsFinalPass ? 0.02 : 1 - segmentShare
     await ffmpeg.writeFile('list.txt', segments.map((s) => `file '${s}'`).join('\n'))
-    const joined = music ? 'joined.mp4' : 'output.mp4'
+    const joined = needsFinalPass ? 'joined.mp4' : 'output.mp4'
     await run(
       ['-f', 'concat', '-safe', '0', '-i', 'list.txt', '-c', 'copy', '-movflags', '+faststart', joined],
       'unir los clips',
     )
     for (const s of segments) await ffmpeg.deleteFile(s)
 
-    // 3. Mezcla la música de fondo con el audio de los clips.
-    if (music) {
-      cb.onStage('Mezclando la música…')
-      stepBase = 0.92
-      stepWeight = 0.08
-      await ffmpeg.writeFile('music', await fetchFile(music.file))
-      const fade =
-        music.fadeOut && totalDuration > 4
-          ? `,afade=t=out:st=${n(totalDuration - 2)}:d=2`
-          : ''
-      await run(
-        [
-          '-i', joined,
-          '-ss', n(music.offset), '-i', 'music',
-          '-filter_complex',
-          `[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
-            `volume=${n(music.volume)},atrim=0:${n(totalDuration)}${fade}[m];` +
-            `[0:a][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]`,
-          '-map', '0:v', '-map', '[a]',
-          '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k',
-          '-movflags', '+faststart',
-          'output.mp4',
-        ],
-        'mezclar la música',
+    // 3. Superpone las transiciones y mezcla su sonido y la música con el audio de los clips.
+    if (needsFinalPass) {
+      cb.onStage(
+        transitions.length
+          ? `Aplicando ${transitions.length} transición(es)${music ? ' y la música' : ''}…`
+          : 'Mezclando la música…',
       )
-      await ffmpeg.deleteFile('music')
+      stepBase = segmentShare + 0.02
+      stepWeight = 1 - stepBase
+      const args: string[] = ['-i', joined]
+      const videoFilters: string[] = []
+      const audioLabels: string[] = ['[0:a]']
+      const audioFilters: string[] = []
+      const audioFmt = 'aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo'
+      const written = new Set<string>()
+      let lastVideo = '[0:v]'
+
+      for (let k = 0; k < transitions.length; k++) {
+        const { stinger, start } = transitions[k]
+        const input = `st_${stinger.id}`
+        if (!written.has(input)) {
+          await ffmpeg.writeFile(input, await fetchFile(stinger.file))
+          written.add(input)
+        }
+        // El decodificador nativo de VP8/VP9 ignora la transparencia; libvpx la conserva.
+        logs = []
+        await ffmpeg.exec(['-hide_banner', '-i', input])
+        const codec = logs.join('\n').match(/Video: (vp8|vp9)/)?.[1]
+        const hasAudio = logs.some((l) => /Stream #.*Audio:/.test(l))
+        if (codec) args.push('-c:v', codec === 'vp9' ? 'libvpx-vp9' : 'libvpx')
+        args.push('-i', input)
+        const idx = k + 1
+
+        // Si el stinger empieza antes del inicio del video, se descarta la parte sobrante.
+        const skip = Math.max(0, -start)
+        const delay = Math.max(0, start)
+        videoFilters.push(
+          `[${idx}:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
+            `fps=30,format=yuva420p,trim=start=${n(skip)},setpts=PTS-STARTPTS,` +
+            `tpad=start_duration=${n(delay)}:color=black@0[s${k}]`,
+          `${lastVideo}[s${k}]overlay=eof_action=pass:format=auto[v${k}]`,
+        )
+        lastVideo = `[v${k}]`
+        if (hasAudio) {
+          audioFilters.push(
+            `[${idx}:a]${audioFmt},atrim=start=${n(skip)},asetpts=PTS-STARTPTS,` +
+              `adelay=${Math.round(delay * 1000)}:all=1[sa${k}]`,
+          )
+          audioLabels.push(`[sa${k}]`)
+        }
+      }
+
+      if (music) {
+        await ffmpeg.writeFile('music', await fetchFile(music.file))
+        args.push('-ss', n(music.offset), '-i', 'music')
+        const fade =
+          music.fadeOut && totalDuration > 4
+            ? `,afade=t=out:st=${n(totalDuration - 2)}:d=2`
+            : ''
+        audioFilters.push(
+          `[${transitions.length + 1}:a]${audioFmt},` +
+            `volume=${n(music.volume)},atrim=0:${n(totalDuration)}${fade}[m]`,
+        )
+        audioLabels.push('[m]')
+      }
+
+      const filters = [...videoFilters]
+      if (videoFilters.length) filters.push(`${lastVideo}format=yuv420p[vout]`)
+      if (audioLabels.length > 1) {
+        filters.push(
+          ...audioFilters,
+          `${audioLabels.join('')}amix=inputs=${audioLabels.length}:duration=first:dropout_transition=0:normalize=0[aout]`,
+        )
+      }
+      if (filters.length) args.push('-filter_complex', filters.join(';'))
+      args.push('-map', videoFilters.length ? '[vout]' : '0:v')
+      args.push('-map', audioLabels.length > 1 ? '[aout]' : '0:a')
+      args.push(
+        ...(videoFilters.length ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23'] : ['-c:v', 'copy']),
+        ...(audioLabels.length > 1 ? ['-c:a', 'aac', '-b:a', '160k'] : ['-c:a', 'copy']),
+        '-t', n(totalDuration),
+        '-movflags', '+faststart',
+        'output.mp4',
+      )
+      await run(args, transitions.length ? 'aplicar las transiciones' : 'mezclar la música')
+
+      for (const f of written) await ffmpeg.deleteFile(f)
+      if (music) await ffmpeg.deleteFile('music')
       await ffmpeg.deleteFile(joined)
     }
 

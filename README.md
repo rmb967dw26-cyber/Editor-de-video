@@ -5,6 +5,7 @@ Editor de video que funciona en el navegador. Todo se procesa en tu equipo: los 
 ## Funciones
 
 - **Clips:** importa varios videos (botón o arrastrar y soltar), recórtalos, divídelos en el cursor y reordénalos arrastrando en la línea de tiempo.
+- **Transiciones stinger:** importa WEBM con transparencia, elige el punto de corte y asígnalas entre clips. Se ven en la vista previa y se incluyen al exportar, con su sonido.
 - **Audio:** ajusta el volumen de cada clip o siléncialo, y añade música de fondo con punto de inicio, volumen y fundido de salida.
 - **Vista previa** continua de toda la secuencia.
 - **Exportación a MP4** (H.264 + AAC) con [FFmpeg.wasm](https://ffmpegwasm.netlify.app/), en 480p, 720p, 1080p, vertical o cuadrado. Los clips con distinta resolución se ajustan automáticamente.

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { captureThumbnail, formatTime, newId, readDuration } from './media'
-import { clipLength, type Clip, type MusicTrack } from './types'
+import { clipLength, placeTransitions, type Clip, type MusicTrack, type Stinger } from './types'
 import { Timeline } from './Timeline'
 import { Inspector } from './Inspector'
 import { ExportDialog } from './ExportDialog'
@@ -11,6 +11,7 @@ const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm
 export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [music, setMusic] = useState<MusicTrack | null>(null)
+  const [stingers, setStingers] = useState<Stinger[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -21,6 +22,8 @@ export default function App() {
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const stingerRef = useRef<HTMLVideoElement>(null)
+  const stingerInput = useRef<HTMLInputElement>(null)
   const videoInput = useRef<HTMLInputElement>(null)
   const musicInput = useRef<HTMLInputElement>(null)
 
@@ -34,15 +37,17 @@ export default function App() {
     })
   }, [clips])
   const total = clips.reduce((t, c) => t + clipLength(c), 0)
+  const transitions = useMemo(() => placeTransitions(clips, starts, stingers), [clips, starts, stingers])
 
   // Referencias que el bucle de reproducción lee sin re-suscribirse.
-  const state = useRef({ clips, starts, total, music, playing, index: -1, token: 0 })
+  const state = useRef({ clips, starts, total, music, transitions, playing, index: -1, token: 0 })
   // Fotograma que mostrar tras el próximo cambio de clips (al recortar).
   const pendingPreview = useRef<{ id: string; local: number } | null>(null)
   state.current.clips = clips
   state.current.starts = starts
   state.current.total = total
   state.current.music = music
+  state.current.transitions = transitions
   state.current.playing = playing
 
   const indexAt = useCallback((t: number) => {
@@ -71,6 +76,29 @@ export default function App() {
     if (!state.current.playing && !a.paused) a.pause()
   }, [])
 
+  /** Muestra el stinger que corresponda al instante `t`, encima del video. */
+  const syncStinger = useCallback((t: number, force = false) => {
+    const s = stingerRef.current
+    if (!s) return
+    const active = state.current.transitions.find(
+      (tr) => t >= tr.start && t < tr.start + tr.stinger.duration,
+    )
+    if (!active) {
+      if (!s.paused) s.pause()
+      s.style.visibility = 'hidden'
+      return
+    }
+    const local = t - active.start
+    if (s.getAttribute('src') !== active.stinger.url) {
+      s.src = active.stinger.url
+      force = true
+    }
+    if (force || Math.abs(s.currentTime - local) > 0.15) s.currentTime = local
+    s.style.visibility = 'visible'
+    if (state.current.playing && s.paused) s.play().catch(() => {})
+    if (!state.current.playing && !s.paused) s.pause()
+  }, [])
+
   /** Coloca la vista previa en el instante global `t`. */
   const seek = useCallback(
     async (t: number, autoplay = state.current.playing) => {
@@ -96,10 +124,11 @@ export default function App() {
       v.currentTime = local
       applyVolume(clip)
       syncMusic(t, true)
+      syncStinger(t, true)
       if (autoplay) await v.play().catch(() => setPlaying(false))
       else v.pause()
     },
-    [indexAt, applyVolume, syncMusic],
+    [indexAt, applyVolume, syncMusic, syncStinger],
   )
 
   // Bucle de reproducción: avanza el cursor y salta al siguiente clip al llegar al punto de salida.
@@ -107,6 +136,7 @@ export default function App() {
     if (!playing) {
       videoRef.current?.pause()
       audioRef.current?.pause()
+      stingerRef.current?.pause()
       return
     }
     let raf = 0
@@ -128,13 +158,14 @@ export default function App() {
         } else {
           setTime(t)
           syncMusic(t)
+          syncStinger(t)
         }
       }
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [playing, seek, syncMusic])
+  }, [playing, seek, syncMusic, syncStinger])
 
   const togglePlay = useCallback(() => {
     if (state.current.clips.length === 0) return
@@ -184,6 +215,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [music])
 
+  useEffect(() => {
+    syncStinger(time, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transitions])
+
   // ---- Importación ----
   const addFiles = useCallback(async (files: File[]) => {
     setError(null)
@@ -200,7 +236,7 @@ export default function App() {
         const thumbnail = await captureThumbnail(url, Math.min(0.5, duration / 2))
         const clip: Clip = {
           id: newId(), file, url, name: file.name, duration,
-          start: 0, end: duration, volume: 1, muted: false, thumbnail,
+          start: 0, end: duration, volume: 1, muted: false, thumbnail, transitionId: null,
         }
         setClips((cs) => [...cs, clip])
         setSelectedId((s) => s ?? clip.id)
@@ -227,6 +263,36 @@ export default function App() {
         setImporting((n) => n - 1)
       }
     }
+  }, [])
+
+  /** Importa transiciones stinger (WEBM con transparencia). */
+  const addStingers = useCallback(async (files: File[]) => {
+    setError(null)
+    setImporting((n) => n + files.length)
+    for (const file of files) {
+      const url = URL.createObjectURL(file)
+      try {
+        const duration = await readDuration(url, 'video')
+        const cutPoint = duration / 2
+        const thumbnail = await captureThumbnail(url, cutPoint * 0.6, 'image/png')
+        const stinger: Stinger = { id: newId(), file, url, name: file.name, duration, cutPoint, thumbnail }
+        setStingers((ss) => [...ss, stinger])
+      } catch (e) {
+        URL.revokeObjectURL(url)
+        setError(`No se pudo abrir la transición «${file.name}»: ${(e as Error).message}`)
+      } finally {
+        setImporting((n) => n - 1)
+      }
+    }
+  }, [])
+
+  const removeStinger = useCallback((id: string) => {
+    setStingers((ss) => {
+      const s = ss.find((x) => x.id === id)
+      if (s) URL.revokeObjectURL(s.url)
+      return ss.filter((x) => x.id !== id)
+    })
+    setClips((cs) => cs.map((c) => (c.transitionId === id ? { ...c, transitionId: null } : c)))
   }, [])
 
   // ---- Edición ----
@@ -268,7 +334,7 @@ export default function App() {
     const second: Clip = { ...clip, id: newId(), start: cut }
     setClips((cs) => {
       const next = [...cs]
-      next.splice(i, 1, { ...clip, end: cut }, second)
+      next.splice(i, 1, { ...clip, end: cut, transitionId: null }, second)
       return next
     })
     setSelectedId(second.id)
@@ -323,6 +389,7 @@ export default function App() {
         <div className="actions">
           <button onClick={() => videoInput.current?.click()}>＋ Añadir videos</button>
           <button onClick={() => musicInput.current?.click()}>♪ {music ? 'Cambiar música' : 'Añadir música'}</button>
+          <button onClick={() => stingerInput.current?.click()}>✨ Transiciones</button>
           <button className="primary" disabled={clips.length === 0} onClick={() => setShowExport(true)}>
             Exportar MP4
           </button>
@@ -341,6 +408,13 @@ export default function App() {
             e.target.value = ''
           }}
         />
+        <input
+          ref={stingerInput} type="file" accept="video/webm,.webm" multiple hidden
+          onChange={(e) => {
+            addStingers([...(e.target.files ?? [])])
+            e.target.value = ''
+          }}
+        />
       </header>
 
       {error && (
@@ -354,6 +428,7 @@ export default function App() {
         <section className="preview">
           <div className="screen">
             <video ref={videoRef} playsInline onClick={togglePlay} />
+            <video ref={stingerRef} className="stinger" playsInline preload="auto" style={{ visibility: 'hidden' }} />
             {clips.length === 0 && (
               <div className="empty">
                 <p>Arrastra aquí tus videos y una canción</p>
@@ -383,6 +458,7 @@ export default function App() {
           index={selectedIndex}
           count={clips.length}
           music={music}
+          stingers={stingers}
           onChange={(patch, previewAt) => {
             if (!selected) return
             if (previewAt !== undefined) {
@@ -393,6 +469,14 @@ export default function App() {
           }}
           onRemove={() => selected && removeClip(selected.id)}
           onMove={(dir) => moveClip(selectedIndex, selectedIndex + dir)}
+          onApplyTransitionToAll={(transitionId) =>
+            setClips((cs) => cs.map((c, i) => (i < cs.length - 1 ? { ...c, transitionId } : c)))
+          }
+          onAddStingers={() => stingerInput.current?.click()}
+          onStingerChange={(id, patch) =>
+            setStingers((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)))
+          }
+          onStingerRemove={removeStinger}
           onMusicChange={(patch) => setMusic((m) => (m ? { ...m, ...patch } : m))}
           onMusicRemove={() => {
             if (music) URL.revokeObjectURL(music.url)
@@ -407,13 +491,14 @@ export default function App() {
         total={total}
         time={time}
         music={music}
+        transitions={transitions}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onSeek={(t) => seek(t)}
         onMove={moveClip}
       />
 
-      {showExport && <ExportDialog clips={clips} music={music} total={total} onClose={() => setShowExport(false)} />}
+      {showExport && <ExportDialog clips={clips} music={music} transitions={transitions} total={total} onClose={() => setShowExport(false)} />}
     </div>
   )
 }
