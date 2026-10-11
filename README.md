@@ -34,3 +34,8 @@ npm run build    # versión de producción en dist/
 - Codificar en el navegador es más lento que con FFmpeg nativo (aprox. 1–3× la duración del video a 720p).
 - FFmpeg.wasm tiene un límite de memoria de unos 2 GB, así que es mejor evitar archivos muy grandes.
 - La vista previa usa los códecs del navegador. Chrome, Edge y Safari reproducen MP4/MOV (H.264).
+
+## Publicación
+
+Cada push a `main` compila la app y la publica en GitHub Pages (`.github/workflows/deploy.yml`).
+La primera vez hay que activarlo en **Settings → Pages → Source: GitHub Actions**.
