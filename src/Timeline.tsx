@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { formatTime, formatTimecode } from './media'
 import { clipLength, type Clip, type MusicTrack, type PlacedTransition, type TrackId, type TrackNames } from './types'
 import { Waveform } from './waveform'
+import { MIN_TITLE_DURATION, type TitleItem } from './titles'
 import { MEDIA_DRAG_TYPE } from './MediaPool'
 import { STINGER_DRAG_TYPE } from './EffectsLibrary'
 
@@ -66,12 +67,25 @@ interface Props {
   onSplitAt: (t: number) => void
   onDropMedia: (mediaId: string, t: number) => void
   onDropStinger: (stingerId: string, t: number) => void
+  /** Recorte arrastrando un borde; `previewAt` es el segundo del archivo que mostrar. */
+  onTrim: (clipId: string, patch: Partial<Clip>, previewAt: number) => void
+  /** Inicio/fin de un arrastre, para que deshacer lo trate como un solo paso. */
+  onGesture: (active: boolean) => void
+  titles: TitleItem[]
+  selectedTitleId: string | null
+  onSelectTitle: (id: string) => void
+  onAddTitle: (t: number) => void
+  onChangeTitle: (id: string, patch: Partial<TitleItem>) => void
 }
+
+const MIN_CLIP_LENGTH = 0.1
+/** Distancia (px) a la que un título se pega a cortes y al cursor. */
+const SNAP_PX = 8
 
 const HEADER_WIDTH = 132
 
 export function Timeline(props: Props) {
-  const { clips, starts, total, time, music, transitions, selectedId, tool } = props
+  const { clips, starts, total, time, music, transitions, selectedId, tool, titles } = props
   const scroller = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
   // null = ajustar todo el proyecto al ancho disponible.
@@ -79,6 +93,9 @@ export function Timeline(props: Props) {
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [dropHint, setDropHint] = useState<number | null>(null)
+  const [dragInfo, setDragInfo] = useState<{ id: string; text: string } | null>(null)
+  // Mientras se arrastra un borde no debe empezar el arrastre para reordenar.
+  const trimming = useRef(false)
 
   useEffect(() => {
     const el = scroller.current
@@ -91,11 +108,12 @@ export function Timeline(props: Props) {
   const fitZoom = total > 0 ? Math.max(2, (width - HEADER_WIDTH - 24) / total) : 40
   const pxPerSec = zoom ?? fitZoom
   const musicLength = music ? Math.min(total, music.duration - music.offset) : 0
-  const contentWidth = Math.max(total, 1) * pxPerSec
+  const titlesEnd = titles.reduce((m, t) => Math.max(m, t.start + t.duration), 0)
+  const contentWidth = Math.max(total, titlesEnd, 1) * pxPerSec
 
   const tickStep = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => s * pxPerSec >= 90) ?? 600
   const ticks: number[] = []
-  for (let t = 0; t <= total + tickStep; t += tickStep) ticks.push(t)
+  for (let t = 0; t <= Math.max(total, titlesEnd) + tickStep; t += tickStep) ticks.push(t)
 
   const timeAt = (e: React.MouseEvent | React.PointerEvent | React.DragEvent, el: Element) => {
     const rect = el.getBoundingClientRect()
@@ -118,10 +136,84 @@ export function Timeline(props: Props) {
     }
   }, [time, pxPerSec])
 
+  /** Arrastre con el puntero; `onMove` recibe el desplazamiento en segundos. */
+  const startDrag = (e: React.PointerEvent, onMove: (dSeconds: number) => void) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const x0 = e.clientX
+    const scale = pxPerSec
+    // En modo «Ajustar», recortar cambia la duración total y con ella la escala:
+    // se fija el zoom para que el borde siga al puntero.
+    if (zoom === null) setZoom(pxPerSec)
+    trimming.current = true
+    props.onGesture(true)
+    const move = (ev: PointerEvent) => onMove((ev.clientX - x0) / scale)
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      trimming.current = false
+      props.onGesture(false)
+      setDragInfo(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
+  const trimClip = (e: React.PointerEvent, clip: Clip, edge: 'start' | 'end') => {
+    if (tool !== 'select') return
+    props.onSelect(clip.id)
+    const orig = { start: clip.start, end: clip.end }
+    startDrag(e, (d) => {
+      if (edge === 'start') {
+        const start = Math.min(Math.max(0, orig.start + d), orig.end - MIN_CLIP_LENGTH)
+        props.onTrim(clip.id, { start }, start)
+        setDragInfo({ id: clip.id, text: `Entrada ${formatTime(start)} · ${formatTime(orig.end - start)}` })
+      } else {
+        const end = Math.max(Math.min(clip.duration, orig.end + d), orig.start + MIN_CLIP_LENGTH)
+        props.onTrim(clip.id, { end }, end - 0.04)
+        setDragInfo({ id: clip.id, text: `Salida ${formatTime(end)} · ${formatTime(end - orig.start)}` })
+      }
+    })
+  }
+
+  // Puntos a los que se pegan los títulos: cortes entre clips, final y cursor.
+  const snap = (t: number) => {
+    const points = [0, ...starts, total, time]
+    const near = points.find((p) => Math.abs(p - t) * pxPerSec <= SNAP_PX)
+    return near ?? t
+  }
+
+  const dragTitle = (e: React.PointerEvent, title: TitleItem, mode: 'move' | 'start' | 'end') => {
+    props.onSelectTitle(title.id)
+    const orig = { start: title.start, end: title.start + title.duration }
+    startDrag(e, (d) => {
+      let patch: Partial<TitleItem>
+      if (mode === 'move') {
+        const start = Math.max(0, snap(orig.start + d))
+        patch = { start }
+      } else if (mode === 'start') {
+        const start = Math.min(Math.max(0, snap(orig.start + d)), orig.end - MIN_TITLE_DURATION)
+        patch = { start, duration: orig.end - start }
+      } else {
+        const end = Math.max(snap(orig.end + d), orig.start + MIN_TITLE_DURATION)
+        patch = { duration: end - orig.start }
+      }
+      props.onChangeTitle(title.id, patch)
+      const start = patch.start ?? orig.start
+      const dur = patch.duration ?? orig.end - orig.start
+      setDragInfo({ id: title.id, text: `${formatTimecode(start)} · ${formatTime(dur)}` })
+    })
+  }
+
   const isExternalDrag = (e: React.DragEvent) =>
     e.dataTransfer.types.includes(MEDIA_DRAG_TYPE) || e.dataTransfer.types.includes(STINGER_DRAG_TYPE)
 
   const clickClip = (e: React.MouseEvent<HTMLDivElement>, clip: Clip, i: number) => {
+    // Soltar un tirador de recorte también genera un clic: no debe mover el cursor.
+    if ((e.target as HTMLElement).classList.contains('trim-handle')) return
     const rect = e.currentTarget.getBoundingClientRect()
     const t = starts[i] + (e.clientX - rect.left) / pxPerSec
     if (tool === 'blade') {
@@ -163,6 +255,40 @@ export function Timeline(props: Props) {
                 <span key={t} className="tick" style={{ left: t * pxPerSec }}>
                   {formatTimecode(t)}
                 </span>
+              ))}
+            </div>
+          </div>
+
+          {/* V2: títulos */}
+          <div className="lane t-lane">
+            <div className="track-head">
+              <span className="track-id t">V2</span>
+              <TrackName name={props.trackNames.v2} onRename={(n) => props.onRenameTrack('v2', n)} />
+              <button className="mute-btn add-title-btn" onClick={() => props.onAddTitle(time)} title="Añadir título en el cursor">
+                ＋T
+              </button>
+            </div>
+            <div
+              className="track"
+              style={{ width: contentWidth }}
+              onDoubleClick={(e) => {
+                if (e.target === e.currentTarget) props.onAddTitle(timeAt(e, e.currentTarget))
+              }}
+            >
+              {titles.length === 0 && <span className="track-hint">Doble clic o ＋T para añadir un título</span>}
+              {titles.map((title) => (
+                <div
+                  key={title.id}
+                  className={`title-clip ${title.id === props.selectedTitleId ? 'selected' : ''} ${title.start >= total && total > 0 ? 'outside' : ''}`}
+                  style={{ left: title.start * pxPerSec, width: Math.max(6, title.duration * pxPerSec - 1) }}
+                  title={`${title.text} — arrastra para mover, tira de los bordes para cambiar la duración`}
+                  onPointerDown={(e) => dragTitle(e, title, 'move')}
+                >
+                  <span className="trim-handle left" onPointerDown={(e) => dragTitle(e, title, 'start')} />
+                  <span className="title-clip-label">T · {title.text.split('\n')[0] || 'Título'}</span>
+                  <span className="trim-handle right" onPointerDown={(e) => dragTitle(e, title, 'end')} />
+                  {dragInfo?.id === title.id && <span className="drag-badge">{dragInfo.text}</span>}
+                </div>
               ))}
             </div>
           </div>
@@ -216,6 +342,10 @@ export function Timeline(props: Props) {
                   title={`${clip.name} — arrastra para reordenar`}
                   draggable={tool === 'select'}
                   onDragStart={(e) => {
+                    if (trimming.current) {
+                      e.preventDefault()
+                      return
+                    }
                     setDragIndex(i)
                     e.dataTransfer.effectAllowed = 'move'
                     e.dataTransfer.setData('text/plain', clip.id)
@@ -240,6 +370,13 @@ export function Timeline(props: Props) {
                   onClick={(e) => clickClip(e, clip, i)}
                 >
                   <span className="clip-label">{clip.name}</span>
+                  {tool === 'select' && (
+                    <>
+                      <span className="trim-handle left" title="Arrastra para recortar el inicio" onPointerDown={(e) => trimClip(e, clip, 'start')} />
+                      <span className="trim-handle right" title="Arrastra para recortar el final" onPointerDown={(e) => trimClip(e, clip, 'end')} />
+                    </>
+                  )}
+                  {dragInfo?.id === clip.id && <span className="drag-badge">{dragInfo.text}</span>}
                 </div>
               ))}
               {transitions.map((tr) => (
@@ -302,7 +439,7 @@ export function Timeline(props: Props) {
             </div>
           </div>
 
-          {clips.length > 0 && <div className="playhead" style={{ left: HEADER_WIDTH + time * pxPerSec }} />}
+ {(clips.length > 0 || titles.length > 0) && <div className="playhead" style={{ left: HEADER_WIDTH + time * pxPerSec }} />}
         </div>
       </div>
     </section>

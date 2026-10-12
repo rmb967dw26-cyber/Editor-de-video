@@ -1,3 +1,5 @@
+import { dbRequest, STORES } from './db'
+
 /**
  * Banco de transiciones: guarda los stingers importados en IndexedDB para que
  * sigan disponibles al volver a abrir el editor en este navegador.
@@ -15,38 +17,8 @@ export interface BankRecord {
   addedAt: number
 }
 
-const DB_NAME = 'editor-video'
-const STORE = 'stingers'
-
-let dbPromise: Promise<IDBDatabase> | null = null
-
-function openDb(): Promise<IDBDatabase> {
-  if (!dbPromise) {
-    dbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1)
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' })
-      req.onsuccess = () => resolve(req.result)
-      req.onerror = () => reject(req.error)
-    })
-    dbPromise.catch(() => {
-      dbPromise = null
-    })
-  }
-  return dbPromise
-}
-
-function run<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-  return openDb().then(
-    (db) =>
-      new Promise<T>((resolve, reject) => {
-        const tx = db.transaction(STORE, mode)
-        const req = fn(tx.objectStore(STORE))
-        tx.oncomplete = () => resolve(req.result)
-        tx.onerror = () => reject(tx.error)
-        tx.onabort = () => reject(tx.error)
-      }),
-  )
-}
+const run = <T,>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>) =>
+  dbRequest(STORES.stingers, mode, fn)
 
 export async function loadBank(): Promise<BankRecord[]> {
   const records = await run<BankRecord[]>('readonly', (s) => s.getAll())

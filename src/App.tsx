@@ -16,6 +16,14 @@ import { useUndoHistory } from './useUndoHistory'
 import {
   categoryFromPath, loadBank, persistStinger, pickStingerFiles, removeFromBank, requestPersistentStorage,
 } from './stingerBank'
+import { createTitle, type TitleItem } from './titles'
+import { TitleOverlay } from './TitleOverlay'
+import { TitleInspector } from './TitleInspector'
+import { ProjectDialog } from './ProjectDialog'
+import {
+  downloadProjectFile, loadProjectFromBrowser, mediaKey, PROJECT_FORMAT, PROJECT_VERSION, saveProjectToBrowser,
+  type MediaRef, type ProjectData,
+} from './projectStore'
 
 const isAudioFile = (f: File) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)
 const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)
@@ -50,6 +58,12 @@ export default function App() {
   const [a2Muted, setA2Muted] = useState(false)
   const [master, setMaster] = useState({ gain: 1, muted: false })
   const [trackNames, setTrackNames] = useState<TrackNames>(loadTrackNames)
+  const [titles, setTitles] = useState<TitleItem[]>([])
+  const [selectedTitleId, setSelectedTitleId] = useState<string | null>(null)
+  const [projectName, setProjectName] = useState('Proyecto sin título')
+  const [projectId, setProjectId] = useState<string | null>(null)
+  const [showProject, setShowProject] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   const masterVolume = master.muted ? 0 : master.gain
   const [panels, setPanels] = useState(() => ({ pool: true, effects: true, inspector: true, mixer: isWide(), source: isWide() }))
   const togglePanel = (k: keyof typeof panels) => setPanels((p) => ({ ...p, [k]: !p[k] }))
@@ -280,19 +294,46 @@ export default function App() {
   // Todo lo que forma parte del montaje. Las bibliotecas (medios y banco de
   // transiciones) no entran: importar no se deshace, pero sí usarlas en el montaje.
   const project = useMemo(
-    () => ({ clips, music, a1, a2Muted, master, trackNames }),
-    [clips, music, a1, a2Muted, master, trackNames],
+    () => ({ clips, music, titles, a1, a2Muted, master, trackNames }),
+    [clips, music, titles, a1, a2Muted, master, trackNames],
   )
   const restoreProject = useCallback((p: typeof project) => {
     setPlaying(false)
     setClips(p.clips)
     setMusic(p.music)
+    setTitles(p.titles)
     setA1(p.a1)
     setA2Muted(p.a2Muted)
     setMaster(p.master)
     setTrackNames(p.trackNames)
   }, [])
   const history = useUndoHistory(project, restoreProject)
+
+  // ---- Cambios sin guardar ----
+  // `savedProject` es el estado del montaje la última vez que se guardó o abrió.
+  const [savedProject, setSavedProject] = useState(project)
+  const markClean = useRef(false)
+  useEffect(() => {
+    if (markClean.current) {
+      markClean.current = false
+      setSavedProject(project)
+    }
+  }, [project])
+  const hasContent = clips.length > 0 || titles.length > 0 || music !== null
+  const dirty = hasContent && project !== savedProject
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault()
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+
+  useEffect(() => {
+    if (!notice) return
+    const id = window.setTimeout(() => setNotice(null), 2600)
+    return () => window.clearTimeout(id)
+  }, [notice])
 
   // Conecta los elementos de la vista previa al motor de audio (medidores y volumen por pista).
   useEffect(() => {
@@ -437,6 +478,173 @@ export default function App() {
     setClips((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)))
   }, [])
 
+  // ---- Títulos (pista V2) ----
+  const selectClip = useCallback((id: string) => {
+    setSelectedId(id)
+    setSelectedTitleId(null)
+  }, [])
+
+  const selectTitle = useCallback((id: string | null) => {
+    setSelectedTitleId(id)
+    if (id) setPanels((p) => ({ ...p, inspector: true }))
+  }, [])
+
+  const addTitle = useCallback((at: number) => {
+    const title = createTitle(Math.max(0, at))
+    setTitles((ts) => [...ts, title])
+    selectTitle(title.id)
+  }, [selectTitle])
+
+  const changeTitle = useCallback((id: string, patch: Partial<TitleItem>) => {
+    setTitles((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)))
+  }, [])
+
+  const removeTitle = useCallback((id: string) => {
+    setTitles((ts) => ts.filter((t) => t.id !== id))
+    setSelectedTitleId((s) => (s === id ? null : s))
+  }, [])
+
+  const duplicateTitle = useCallback((id: string) => {
+    const original = titles.find((t) => t.id === id)
+    if (!original) return
+    const copy = { ...original, id: newId(), start: original.start + original.duration }
+    setTitles((ts) => [...ts, copy])
+    selectTitle(copy.id)
+  }, [titles, selectTitle])
+
+  // ---- Proyecto: guardar y abrir ----
+  const buildProjectData = (): { data: ProjectData; files: Map<string, File> } => {
+    const files = new Map<string, File>()
+    const refs: MediaRef[] = []
+    const addRef = (file: File, kind: 'video' | 'audio', duration: number, thumbnail: string | null) => {
+      const key = mediaKey(file)
+      if (!files.has(key)) {
+        files.set(key, file)
+        refs.push({ key, kind, name: file.name, size: file.size, lastModified: file.lastModified, duration, thumbnail })
+      }
+      return key
+    }
+    for (const m of media) addRef(m.file, m.kind, m.duration, m.thumbnail)
+    const clipRefs = clips.map((c) => {
+      const stinger = c.transitionId ? stingers.find((st) => st.id === c.transitionId) : undefined
+      return {
+        mediaKey: addRef(c.file, 'video', c.duration, c.thumbnail),
+        start: c.start, end: c.end, volume: c.volume, muted: c.muted,
+        transition: stinger ? { id: stinger.id, name: stinger.name, size: stinger.file.size } : null,
+      }
+    })
+    const data: ProjectData = {
+      format: PROJECT_FORMAT,
+      version: PROJECT_VERSION,
+      name: projectName.trim() || 'Proyecto sin título',
+      savedAt: Date.now(),
+      media: refs,
+      clips: clipRefs,
+      music: music
+        ? { mediaKey: addRef(music.file, 'audio', music.duration, null), offset: music.offset, volume: music.volume, fadeOut: music.fadeOut }
+        : null,
+      titles, a1, a2Muted, master, trackNames,
+    }
+    return { data, files }
+  }
+
+  const saveToBrowser = async () => {
+    const { data, files } = buildProjectData()
+    const id = projectId ?? newId()
+    requestPersistentStorage()
+    try {
+      await saveProjectToBrowser(id, data, files, {
+        clipCount: clips.length, duration: total, thumbnail: clips[0]?.thumbnail ?? null,
+      })
+    } catch (e) {
+      throw new Error(`No se pudo guardar en el navegador (${(e as Error).message || 'sin espacio'}). Prueba con «Descargar archivo».`)
+    }
+    setProjectId(id)
+    setSavedProject(project)
+    setNotice(`«${data.name}» guardado`)
+  }
+
+  /** Sustituye el proyecto actual por `data`, usando los archivos encontrados. */
+  const applyProjectData = (data: ProjectData, files: Map<string, File>, id: string | null) => {
+    const items: MediaItem[] = []
+    const byKey = new Map<string, MediaItem>()
+    for (const ref of data.media) {
+      const file = files.get(ref.key)
+      if (!file) continue
+      const item: MediaItem = {
+        id: newId(), kind: ref.kind, file, url: URL.createObjectURL(file), name: ref.name,
+        duration: ref.duration, thumbnail: ref.thumbnail,
+      }
+      items.push(item)
+      byKey.set(ref.key, item)
+    }
+    let missingTransitions = 0
+    const nextClips: Clip[] = []
+    for (const c of data.clips) {
+      const item = byKey.get(c.mediaKey)
+      if (!item) continue
+      let transitionId: string | null = null
+      if (c.transition) {
+        const t = c.transition
+        const found = stingersRef.current.find((s) => s.id === t.id) ??
+          stingersRef.current.find((s) => s.name === t.name && s.file.size === t.size)
+        if (found) transitionId = found.id
+        else missingTransitions++
+      }
+      nextClips.push({ ...clipFromMedia(item, c.start, Math.min(c.end, item.duration)), volume: c.volume, muted: c.muted, transitionId })
+    }
+    const musicItem = data.music ? byKey.get(data.music.mediaKey) : undefined
+
+    for (const m of media) URL.revokeObjectURL(m.url)
+    setPlaying(false)
+    setMedia(items)
+    setSourceId(items[0]?.id ?? null)
+    setClips(nextClips)
+    setMusic(musicItem && data.music
+      ? { ...musicFromMedia(musicItem), offset: data.music.offset, volume: data.music.volume, fadeOut: data.music.fadeOut }
+      : null)
+    setTitles(data.titles ?? [])
+    setA1(data.a1 ?? { gain: 1, muted: false })
+    setA2Muted(data.a2Muted ?? false)
+    setMaster(data.master ?? { gain: 1, muted: false })
+    setTrackNames({ ...DEFAULT_TRACK_NAMES, ...data.trackNames })
+    setSelectedId(nextClips[0]?.id ?? null)
+    setSelectedTitleId(null)
+    setTime(0)
+    setProjectName(data.name)
+    setProjectId(id)
+    history.reset()
+    markClean.current = true
+
+    const lostClips = data.clips.length - nextClips.length
+    const warnings = [
+      lostClips > 0 && `${lostClips} clip(s) sin su archivo`,
+      data.music && !musicItem && 'la música no se encontró',
+      missingTransitions > 0 && `${missingTransitions} transición(es) que no están en tu banco`,
+    ].filter(Boolean)
+    if (warnings.length) setError(`Proyecto abierto con avisos: ${warnings.join(' · ')}.`)
+    else setNotice(`«${data.name}» abierto`)
+  }
+
+  const newProject = () => {
+    for (const m of media) URL.revokeObjectURL(m.url)
+    setPlaying(false)
+    setMedia([])
+    setSourceId(null)
+    setClips([])
+    setMusic(null)
+    setTitles([])
+    setA1({ gain: 1, muted: false })
+    setA2Muted(false)
+    setMaster({ gain: 1, muted: false })
+    setSelectedId(null)
+    setSelectedTitleId(null)
+    setProjectName('Proyecto sin título')
+    setProjectId(null)
+    history.reset()
+    markClean.current = true
+  }
+
   const removeClip = useCallback((id: string) => {
     // El archivo sigue en la biblioteca de medios, así que su URL no se libera.
     setClips((cs) => cs.filter((c) => c.id !== id))
@@ -479,12 +687,22 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
       const tag = target.tagName
-      if (showExport) return
+      if (showExport || showProject) return
       if (e.ctrlKey || e.metaKey) {
         // Al escribir un nombre, Ctrl+Z deshace el texto del campo, no el montaje.
         const typing = tag === 'TEXTAREA' || (target instanceof HTMLInputElement && !['range', 'checkbox'].includes(target.type))
         const key = e.key.toLowerCase()
         if (typing) return
+        if (key === 's') {
+          e.preventDefault()
+          if (hasContent) saveToBrowser().catch((err) => setError((err as Error).message))
+          return
+        }
+        if (key === 'o') {
+          e.preventDefault()
+          setShowProject(true)
+          return
+        }
         if (key === 'z') {
           e.preventDefault()
           if (e.shiftKey) history.redo()
@@ -505,8 +723,12 @@ export default function App() {
         setTool('blade')
       } else if (e.key === 'a' || e.key === 'A' || e.key === 'Escape') {
         setTool('select')
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTitleId) {
+        removeTitle(selectedTitleId)
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         removeClip(selectedId)
+      } else if (e.key === 't' || e.key === 'T') {
+        addTitle(time)
       } else if (e.key === 'ArrowLeft') {
         seek(time - (e.shiftKey ? 1 : 1 / 30))
       } else if (e.key === 'ArrowRight') {
@@ -515,10 +737,12 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, splitAt, removeClip, selectedId, seek, time, showExport, history])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [togglePlay, splitAt, removeClip, selectedId, selectedTitleId, seek, time, showExport, showProject, history, hasContent])
 
   const selectedIndex = clips.findIndex((c) => c.id === selectedId)
   const selected = selectedIndex >= 0 ? clips[selectedIndex] : null
+  const selectedTitle = titles.find((t) => t.id === selectedTitleId) ?? null
 
   const sourceItem = media.find((m) => m.id === sourceId) ?? null
 
@@ -555,12 +779,19 @@ export default function App() {
             ↷
           </button>
           <span className="top-sep" />
+          <button className="top-btn project-btn" onClick={() => setShowProject(true)} title="Guardar y abrir proyectos (Ctrl+S / Ctrl+O)">
+            ☰ Proyecto
+          </button>
+          <span className="top-sep" />
           <button className={`top-btn ${panels.pool ? 'on' : ''}`} onClick={() => togglePanel('pool')}>▤ Medios</button>
           <button className={`top-btn ${panels.effects ? 'on' : ''}`} onClick={() => togglePanel('effects')}>✦ Efectos</button>
           <button className={`top-btn hide-narrow ${panels.source ? 'on' : ''}`} onClick={() => togglePanel('source')}>◫ Visor doble</button>
         </div>
         <h1 className="project-title">
-          Proyecto sin título <span className="muted">{clips.length ? '· Editado' : ''}</span>
+          <button className="title-btn" onClick={() => setShowProject(true)} title="Proyecto">
+            {projectName || 'Proyecto sin título'}
+          </button>
+          <span className="muted">{dirty ? ' · Sin guardar' : projectId ? ' · Guardado' : ''}</span>
         </h1>
         <div className="topbar-group">
           <button className={`top-btn hide-narrow ${panels.mixer ? 'on' : ''}`} onClick={() => togglePanel('mixer')}>☷ Mezclador</button>
@@ -593,6 +824,7 @@ export default function App() {
         />
       </header>
 
+      {notice && !error && <div className="notice" role="status">{notice}</div>}
       {error && (
         <div className="error" role="alert">
           {error}
@@ -624,6 +856,7 @@ export default function App() {
             <div className="viewer-screen">
               <video ref={videoRef} playsInline onClick={togglePlay} />
               <video ref={stingerRef} className="stinger" playsInline preload="auto" style={{ visibility: 'hidden' }} />
+              <TitleOverlay titles={titles} time={time} />
               {clips.length === 0 && (
                 <div className="empty">
                   <p>Arrastra aquí tus videos y una canción</p>
@@ -645,7 +878,21 @@ export default function App() {
           <audio ref={audioRef} src={music?.url} preload="auto" />
         </div>
 
-        {panels.inspector && (
+        {panels.inspector && selectedTitle && (
+          <section className="panel inspector">
+            <header className="panel-head">
+              <span className="panel-title">Inspector</span>
+              <span className="muted small-text insp-clip-name">Título · V2</span>
+            </header>
+            <TitleInspector
+              title={selectedTitle}
+              onChange={(patch) => changeTitle(selectedTitle.id, patch)}
+              onRemove={() => removeTitle(selectedTitle.id)}
+              onDuplicate={() => duplicateTitle(selectedTitle.id)}
+            />
+          </section>
+        )}
+        {panels.inspector && !selectedTitle && (
           <Inspector
             clip={selected}
             index={selectedIndex}
@@ -697,7 +944,7 @@ export default function App() {
           a2Muted={a2Muted}
           onToolChange={setTool}
           onToggleMute={(track) => (track === 'a1' ? setA1((a) => ({ ...a, muted: !a.muted })) : setA2Muted((m) => !m))}
-          onSelect={setSelectedId}
+          onSelect={selectClip}
           onSeek={(t) => seek(t)}
           onMove={moveClip}
           onSplitAt={(t) => splitAt(t)}
@@ -712,6 +959,17 @@ export default function App() {
             const index = clips.findIndex((c, i) => starts[i] + clipLength(c) / 2 > t)
             insertClip(item, index === -1 ? undefined : index)
           }}
+          onTrim={(id, patch, previewAt) => {
+            pendingPreview.current = { id, local: previewAt }
+            setPlaying(false)
+            updateClip(id, patch)
+          }}
+          onGesture={history.setGesture}
+          titles={titles}
+          selectedTitleId={selectedTitleId}
+          onSelectTitle={selectTitle}
+          onAddTitle={addTitle}
+          onChangeTitle={changeTitle}
           onDropStinger={(id, t) => {
             if (clips.length < 2) {
               setError('Añade al menos dos clips para poner una transición entre ellos.')
@@ -764,11 +1022,36 @@ export default function App() {
         </button>
       </nav>
 
+      {showProject && (
+        <ProjectDialog
+          name={projectName}
+          dirty={dirty}
+          currentId={projectId}
+          hasContent={hasContent}
+          onRename={setProjectName}
+          onSave={saveToBrowser}
+          onDownload={() => {
+            const { data } = buildProjectData()
+            downloadProjectFile(data)
+            setSavedProject(project)
+            setNotice('Archivo de proyecto descargado')
+          }}
+          onOpenSaved={async (id) => {
+            const { data, files } = await loadProjectFromBrowser(id)
+            applyProjectData(data, files, id)
+          }}
+          onOpenData={(data, files) => applyProjectData(data, files, null)}
+          onNew={newProject}
+          onClose={() => setShowProject(false)}
+        />
+      )}
+
       {showExport && (
         <ExportDialog
           clips={clips.map((c) => ({ ...c, volume: c.volume * a1.gain, muted: c.muted || a1.muted }))}
           music={a2Muted ? null : music}
           transitions={transitions}
+          titles={titles}
           total={total}
           masterVolume={masterVolume}
           onClose={() => setShowExport(false)}

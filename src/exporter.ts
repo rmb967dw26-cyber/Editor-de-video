@@ -3,6 +3,7 @@ import { fetchFile, toBlobURL } from '@ffmpeg/util'
 import coreURL from '@ffmpeg/core?url'
 import wasmURL from '@ffmpeg/core/wasm?url'
 import { clipLength, type Clip, type ExportSettings, type MusicTrack, type PlacedTransition } from './types'
+import { FADE_SECONDS, renderTitlePng, type TitleItem } from './titles'
 
 let instance: FFmpeg | null = null
 let loading: Promise<FFmpeg> | null = null
@@ -44,6 +45,7 @@ export async function exportProject(
   clips: Clip[],
   music: MusicTrack | null,
   transitions: PlacedTransition[],
+  titles: TitleItem[],
   settings: ExportSettings,
   cb: ExportCallbacks,
 ): Promise<Blob> {
@@ -77,7 +79,7 @@ export async function exportProject(
 
   const totalDuration = clips.reduce((t, c) => t + clipLength(c), 0)
   // Reparto aproximado de la barra de progreso entre las fases.
-  const segmentShare = transitions.length ? 0.6 : music ? 0.9 : 0.97
+  const segmentShare = transitions.length || titles.length ? 0.6 : music ? 0.9 : 0.97
   const { width: W, height: H } = settings
   const segments: string[] = []
 
@@ -125,7 +127,12 @@ export async function exportProject(
     // 2. Une los segmentos sin recodificar.
     cb.onStage('Uniendo clips…')
     const master = Math.max(0, settings.masterVolume)
-    const needsFinalPass = !!music || transitions.length > 0 || Math.abs(master - 1) > 0.001
+    // Solo los títulos que empiezan antes de que acabe el video; se recortan al final.
+    const activeTitles = titles
+      .filter((t) => t.text.trim() && t.start < totalDuration - 0.05)
+      .map((t) => ({ ...t, duration: Math.min(t.duration, totalDuration - t.start) }))
+    const needsFinalPass =
+      !!music || transitions.length > 0 || activeTitles.length > 0 || Math.abs(master - 1) > 0.001
     stepBase = segmentShare
     stepWeight = needsFinalPass ? 0.02 : 1 - segmentShare
     await ffmpeg.writeFile('list.txt', segments.map((s) => `file '${s}'`).join('\n'))
@@ -138,13 +145,12 @@ export async function exportProject(
 
     // 3. Superpone las transiciones y mezcla su sonido y la música con el audio de los clips.
     if (needsFinalPass) {
-      cb.onStage(
-        transitions.length
-          ? `Aplicando ${transitions.length} transición(es)${music ? ' y la música' : ''}…`
-          : music
-            ? 'Mezclando la música…'
-            : 'Ajustando el volumen general…',
-      )
+      const parts = [
+        transitions.length && `${transitions.length} transición(es)`,
+        activeTitles.length && `${activeTitles.length} título(s)`,
+        music && 'la música',
+      ].filter(Boolean)
+      cb.onStage(parts.length ? `Aplicando ${parts.join(', ')}…` : 'Ajustando el volumen general…')
       stepBase = segmentShare + 0.02
       stepWeight = 1 - stepBase
       const args: string[] = ['-i', joined]
@@ -204,6 +210,27 @@ export async function exportProject(
         audioLabels.push('[m]')
       }
 
+      // Títulos: imagen PNG transparente en bucle durante su duración, encima de todo.
+      let nextInput = transitions.length + 1 + (music ? 1 : 0)
+      for (let k = 0; k < activeTitles.length; k++) {
+        const title = activeTitles[k]
+        const file = `title_${k}.png`
+        await ffmpeg.writeFile(file, await renderTitlePng(title, W, H))
+        written.add(file)
+        args.push('-loop', '1', '-framerate', '30', '-t', n(title.duration), '-i', file)
+        const fade = Math.min(FADE_SECONDS, title.duration / 2)
+        const fades = title.fade
+          ? `,fade=t=in:st=0:d=${n(fade)}:alpha=1,fade=t=out:st=${n(title.duration - fade)}:d=${n(fade)}:alpha=1`
+          : ''
+        videoFilters.push(
+          `[${nextInput}:v]format=yuva420p${fades},setpts=PTS-STARTPTS,` +
+            `tpad=start_duration=${n(title.start)}:color=black@0[t${k}]`,
+          `${lastVideo}[t${k}]overlay=eof_action=pass:format=auto[vt${k}]`,
+        )
+        lastVideo = `[vt${k}]`
+        nextInput++
+      }
+
       const filters = [...videoFilters]
       if (videoFilters.length) filters.push(`${lastVideo}format=yuv420p[vout]`)
       // Mezcla de todas las fuentes y, al final, el fader del máster.
@@ -228,7 +255,7 @@ export async function exportProject(
         '-movflags', '+faststart',
         'output.mp4',
       )
-      await run(args, transitions.length ? 'aplicar las transiciones' : 'mezclar el audio')
+      await run(args, transitions.length || activeTitles.length ? 'aplicar transiciones y títulos' : 'mezclar el audio')
 
       for (const f of written) await ffmpeg.deleteFile(f)
       if (music) await ffmpeg.deleteFile('music')

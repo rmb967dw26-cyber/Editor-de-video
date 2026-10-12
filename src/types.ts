@@ -76,10 +76,10 @@ export interface ExportSettings {
   masterVolume: number
 }
 
-export type TrackId = 'v1' | 'a1' | 'a2'
+export type TrackId = 'v2' | 'v1' | 'a1' | 'a2'
 export type TrackNames = Record<TrackId, string>
 
-export const DEFAULT_TRACK_NAMES: TrackNames = { v1: 'Video 1', a1: 'Audio 1', a2: 'Música' }
+export const DEFAULT_TRACK_NAMES: TrackNames = { v2: 'Títulos', v1: 'Video 1', a1: 'Audio 1', a2: 'Música' }
 
 export const clipLength = (c: Clip) => Math.max(0, c.end - c.start)
 

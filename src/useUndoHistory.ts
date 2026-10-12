@@ -18,12 +18,25 @@ export function useUndoHistory<T>(snapshot: T, restore: (state: T) => void) {
   const current = useRef(snapshot)
   const restoring = useRef(false)
   const lastSlider = useRef<{ el: Element | null; at: number }>({ el: null, at: 0 })
+  // Gesto en curso (p. ej. arrastrar el borde de un clip): todo cuenta como un paso.
+  const gesture = useRef({ active: false, recorded: false })
+  const resetPending = useRef(false)
   const [counts, setCounts] = useState({ undo: 0, redo: 0 })
 
   const sync = () => setCounts({ undo: past.current.length, redo: future.current.length })
 
   useEffect(() => {
     if (snapshot === current.current) return
+    if (resetPending.current) {
+      // Se ha abierto otro proyecto: el historial empieza de cero.
+      resetPending.current = false
+      restoring.current = false
+      past.current = []
+      future.current = []
+      current.current = snapshot
+      sync()
+      return
+    }
     if (restoring.current) {
       // Este cambio lo produjo deshacer/rehacer: no es un paso nuevo.
       restoring.current = false
@@ -33,7 +46,10 @@ export function useUndoHistory<T>(snapshot: T, restore: (state: T) => void) {
     const active = document.activeElement
     const slider = active instanceof HTMLInputElement && active.type === 'range' ? active : null
     const now = performance.now()
-    const merge = slider !== null && lastSlider.current.el === slider && now - lastSlider.current.at < MERGE_MS
+    const merge = gesture.current.active
+      ? gesture.current.recorded
+      : slider !== null && lastSlider.current.el === slider && now - lastSlider.current.at < MERGE_MS
+    if (gesture.current.active) gesture.current.recorded = true
     if (!merge) {
       past.current.push(current.current)
       if (past.current.length > LIMIT) past.current.shift()
@@ -60,5 +76,18 @@ export function useUndoHistory<T>(snapshot: T, restore: (state: T) => void) {
   const undo = useCallback(() => step(past, future), [step])
   const redo = useCallback(() => step(future, past), [step])
 
-  return { undo, redo, canUndo: counts.undo > 0, canRedo: counts.redo > 0 }
+  /** Marca el inicio o el final de un gesto de arrastre. */
+  const setGesture = useCallback((active: boolean) => {
+    gesture.current = { active, recorded: false }
+  }, [])
+
+  /** Vacía el historial con el próximo cambio de estado (al abrir o crear un proyecto). */
+  const reset = useCallback(() => {
+    resetPending.current = true
+    past.current = []
+    future.current = []
+    setCounts({ undo: 0, redo: 0 })
+  }, [])
+
+  return { undo, redo, setGesture, reset, canUndo: counts.undo > 0, canRedo: counts.redo > 0 }
 }

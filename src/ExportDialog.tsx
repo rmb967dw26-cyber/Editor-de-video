@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { cancelExport, exportProject } from './exporter'
 import { formatTime } from './media'
 import type { Clip, MusicTrack, PlacedTransition } from './types'
+import type { TitleItem } from './titles'
 
 const PRESETS = [
   { label: '720p horizontal (1280×720) — recomendado', width: 1280, height: 720 },
@@ -15,6 +16,7 @@ interface Props {
   clips: Clip[]
   music: MusicTrack | null
   transitions: PlacedTransition[]
+  titles: TitleItem[]
   total: number
   masterVolume: number
   onClose: () => void
@@ -22,7 +24,7 @@ interface Props {
 
 type Status = 'idle' | 'running' | 'done' | 'error'
 
-export function ExportDialog({ clips, music, transitions, total, masterVolume, onClose }: Props) {
+export function ExportDialog({ clips, music, transitions, titles, total, masterVolume, onClose }: Props) {
   const [preset, setPreset] = useState(0)
   const [status, setStatus] = useState<Status>('idle')
   const [stage, setStage] = useState('')
@@ -51,7 +53,7 @@ export function ExportDialog({ clips, music, transitions, total, masterVolume, o
     setError('')
     try {
       const { width, height } = PRESETS[preset]
-      const blob = await exportProject(clips, music, transitions, { width, height, masterVolume }, {
+      const blob = await exportProject(clips, music, transitions, titles, { width, height, masterVolume }, {
         onStage: setStage,
         onProgress: setProgress,
       })
@@ -83,6 +85,7 @@ export function ExportDialog({ clips, music, transitions, total, masterVolume, o
             <p className="muted">
               {clips.length} clip(s) · {formatTime(total)}
               {transitions.length ? ` · ${transitions.length} transición(es)` : ''}
+              {titles.length ? ` · ${titles.length} título(s)` : ''}
               {music ? ' · con música' : ''}. El video se procesa en tu
               navegador: tus archivos no se suben a ningún servidor.
             </p>

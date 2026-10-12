@@ -398,3 +398,72 @@ select {
   .tl-info { display: none; }
   .pagebar { position: sticky; bottom: 0; z-index: 10; height: 44px; }
 }
+
+/* ---------- Títulos (V2) ---------- */
+.t-lane .track { height: 34px; }
+.track-id.t { background: #3d2a52; color: #d4b5f5; }
+.add-title-btn { font-size: 10px; }
+.title-clip {
+  position: absolute; top: 0; bottom: 0; border-radius: 3px; overflow: visible; cursor: grab; touch-action: none;
+  background: #6b4a93; border: 1px solid rgba(0, 0, 0, 0.6); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.title-clip:active { cursor: grabbing; }
+.title-clip.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+.title-clip.outside { opacity: 0.45; }
+.title-clip-label {
+  position: absolute; inset: 0 8px; display: flex; align-items: center; font-size: 11px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; pointer-events: none;
+}
+.title-overlay { position: absolute; pointer-events: none; }
+
+/* Tiradores para recortar clips y cambiar la duración de los títulos */
+.trim-handle {
+  position: absolute; top: 0; bottom: 0; width: 8px; z-index: 2; cursor: ew-resize; touch-action: none;
+}
+.trim-handle.left { left: 0; border-left: 3px solid transparent; }
+.trim-handle.right { right: 0; border-right: 3px solid transparent; }
+.clip:hover .trim-handle.left, .title-clip:hover .trim-handle.left { border-left-color: rgba(255, 220, 160, 0.9); }
+.clip:hover .trim-handle.right, .title-clip:hover .trim-handle.right { border-right-color: rgba(255, 220, 160, 0.9); }
+.clip { overflow: visible; }
+.drag-badge {
+  position: absolute; top: -22px; left: 50%; transform: translateX(-50%); z-index: 6; white-space: nowrap;
+  background: #000; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 3px; pointer-events: none;
+  font-variant-numeric: tabular-nums; border: 1px solid var(--accent);
+}
+
+/* Inspector de títulos */
+.title-text {
+  width: 100%; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 3px; resize: vertical;
+  background: var(--field); color: var(--text); border: 1px solid var(--line); margin-left: 0;
+}
+.color-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; grid-column: 2 / 4; }
+.color-row select { width: auto; flex: 1; }
+.color-row input[type='color'] { width: 30px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; border-radius: 3px; }
+.check.inline { padding: 0; }
+.seg { display: flex; grid-column: 2 / 4; background: var(--field); border-radius: 3px; padding: 2px; gap: 2px; }
+.seg button { flex: 1; justify-content: center; background: transparent; border: none; padding: 2px 4px; font-size: 11px; color: var(--muted); }
+.seg button.active { background: #34343b; color: var(--accent); }
+
+/* Proyecto */
+.title-btn { background: none; border: none; padding: 2px 6px; font: inherit; font-weight: 600; color: var(--text); }
+.title-btn:hover:not(:disabled) { background: #2e2e34; }
+.notice {
+  grid-row: 2; padding: 6px 12px; background: #1c3a2a; color: #c8f2d8; font-size: 12px;
+}
+.project-modal { width: min(600px, 100%); }
+.project-modal h3 { font-size: 13px; margin: 16px 0 8px; }
+.text-input {
+  font: inherit; padding: 6px 8px; border-radius: 4px; background: var(--field); color: var(--text); border: 1px solid var(--line);
+}
+.project-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.project-list li {
+  display: grid; grid-template-columns: 56px minmax(0, 1fr) auto auto; align-items: center; gap: 10px;
+  padding: 5px 6px; border-radius: 4px; background: #222226; border: 1px solid #2c2c32;
+}
+.project-list li.current { border-color: var(--accent); }
+.project-thumb { height: 32px; border-radius: 3px; background: #0d0d0f center / cover no-repeat; }
+.project-info { display: flex; flex-direction: column; min-width: 0; }
+.project-info b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.missing-list { list-style: none; padding: 0; margin: 8px 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
+.missing-list li { padding: 2px 0; color: #ffb4b6; }
+.missing-list li.ok { color: #9be3b5; }
