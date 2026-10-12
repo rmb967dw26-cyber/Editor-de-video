@@ -1,6 +1,6 @@
-# Editor de Video
+# PollArt
 
-Editor de video que funciona en el navegador. Todo se procesa en tu equipo: los archivos no se suben a ningún servidor.
+PollArt es un editor de video que funciona en el navegador. Todo se procesa en tu equipo: los archivos no se suben a ningún servidor.
 
 ## Funciones
 
