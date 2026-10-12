@@ -20,6 +20,7 @@ import { createTitle, type TitleItem } from './titles'
 import { TitleOverlay } from './TitleOverlay'
 import { TitleInspector } from './TitleInspector'
 import { ProjectDialog } from './ProjectDialog'
+import { Logo } from './Logo'
 import {
   downloadProjectFile, loadProjectFromBrowser, mediaKey, PROJECT_FORMAT, PROJECT_VERSION, saveProjectToBrowser,
   type MediaRef, type ProjectData,
@@ -772,6 +773,8 @@ export default function App() {
     >
       <header className="topbar">
         <div className="topbar-group">
+          <Logo />
+          <span className="top-sep" />
           <button className="top-btn undo-btn" onClick={history.undo} disabled={!history.canUndo} title="Deshacer (Ctrl+Z)" aria-label="Deshacer">
             ↶
           </button>

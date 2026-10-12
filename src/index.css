@@ -467,3 +467,17 @@ select {
 .missing-list { list-style: none; padding: 0; margin: 8px 0; max-height: 220px; overflow-y: auto; font-size: 12px; }
 .missing-list li { padding: 2px 0; color: #ffb4b6; }
 .missing-list li.ok { color: #9be3b5; }
+
+/* ---------- Logotipo ---------- */
+.logo { display: inline-flex; align-items: center; gap: 7px; padding: 0 4px 0 2px; flex: none; user-select: none; }
+.logo-mark { width: 22px; height: 22px; display: block; }
+.logo-text { font-weight: 800; font-size: 15px; letter-spacing: -0.2px; color: var(--text); }
+.logo-accent {
+  background: linear-gradient(90deg, #f08a3e, #d4569a); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+@media (max-width: 1099px) {
+  .logo-text { display: none; }
+}
+@media (max-width: 760px) {
+  .logo-text { display: inline; }
+}
