@@ -859,7 +859,19 @@ export default function App() {
             <div className="viewer-screen">
               <video ref={videoRef} playsInline onClick={togglePlay} />
               <video ref={stingerRef} className="stinger" playsInline preload="auto" style={{ visibility: 'hidden' }} />
-              <TitleOverlay titles={titles} time={time} />
+              <TitleOverlay
+                titles={titles}
+                time={time}
+                selectedId={selectedTitleId}
+                onSelect={selectTitle}
+                onChange={changeTitle}
+                onGesture={history.setGesture}
+                onBackgroundClick={togglePlay}
+                onEditText={() => {
+                  setPanels((p) => ({ ...p, inspector: true }))
+                  requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.title-text')?.focus())
+                }}
+              />
               {clips.length === 0 && (
                 <div className="empty">
                   <p>Arrastra aquí tus videos y una canción</p>

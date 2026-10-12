@@ -75,12 +75,43 @@ export function TitleInspector({ title, onChange, onRemove, onDuplicate }: Props
         <div className="insp-section-head"><span className="dot" />Posición</div>
         <label className="param">
           <span className="param-label">Lugar</span>
-          <select value={title.position} onChange={(e) => onChange({ position: e.target.value as TitlePosition })}>
+          <select
+            value={title.position}
+            onChange={(e) => {
+              const position = e.target.value as TitlePosition
+              // Al elegir una posición predefinida se olvida la posición libre.
+              onChange(position === 'custom' ? { position, x: title.x ?? 0.5, y: title.y ?? 0.5 } : { position, x: undefined, y: undefined })
+            }}
+          >
             {(Object.keys(POSITION_LABELS) as TitlePosition[]).map((p) => (
               <option key={p} value={p}>{POSITION_LABELS[p]}</option>
             ))}
           </select>
         </label>
+        {title.position === 'custom' && (
+          <>
+            <label className="param">
+              <span className="param-label">Horizontal</span>
+              <input
+                type="range" min={0} max={1} step={0.005} value={title.x ?? 0.5}
+                onChange={(e) => onChange({ x: Number(e.target.value) })}
+              />
+              <span className="param-value">{Math.round((title.x ?? 0.5) * 100)}%</span>
+            </label>
+            <label className="param">
+              <span className="param-label">Vertical</span>
+              <input
+                type="range" min={0} max={1} step={0.005} value={title.y ?? 0.5}
+                onChange={(e) => onChange({ y: Number(e.target.value) })}
+              />
+              <span className="param-value">{Math.round((title.y ?? 0.5) * 100)}%</span>
+            </label>
+            <div className="insp-actions">
+              <button className="small" onClick={() => onChange({ x: 0.5, y: 0.5 })}>Centrar</button>
+            </div>
+          </>
+        )}
+        <p className="muted small-text insp-note">Arrastra el título en el visor para colocarlo donde quieras.</p>
         <div className="param">
           <span className="param-label">Alineación</span>
           <div className="seg" role="group" aria-label="Alineación">

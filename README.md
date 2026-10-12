@@ -7,7 +7,7 @@ PollArt es un editor de video que funciona en el navegador. Todo se procesa en t
 Interfaz de editor profesional: biblioteca de medios, visor de origen y de programa, inspector con pestañas, panel de efectos, línea de tiempo con pistas V1/A1/A2 y formas de onda, y mezclador con medidores de nivel.
 
 - **Clips:** importa varios videos (botón o arrastrar y soltar), recórtalos, divídelos en el cursor y reordénalos arrastrando en la línea de tiempo.
-- **Títulos y texto (pista V2):** añade títulos con ＋T, la tecla `T` o doble clic en la pista. Muévelos y cambia su duración arrastrando; edita texto, fuente, tamaño, color, fondo, posición y fundido en el inspector.
+- **Títulos y texto (pista V2):** añade títulos con ＋T, la tecla `T` o doble clic en la pista. Muévelos y cambia su duración arrastrando; arrástralos en el visor para colocarlos en cualquier punto (se pegan al centro), y edita texto, fuente, tamaño, color, fondo, posición y fundido en el inspector.
 - **Recortar arrastrando:** tira de los bordes de un clip en la línea de tiempo.
 - **Proyectos:** guárdalos en el navegador (`Ctrl+S`, incluye tus videos) o descárgalos como archivo `.editorvideo.json` para abrirlos en otro equipo.
 - **Banco de transiciones:** importa una carpeta completa (p. ej. la de tus paquetes descomprimidos) y el editor guarda todos los WEBM en el navegador, agrupados por paquete. Siguen ahí la próxima vez que abras el editor.

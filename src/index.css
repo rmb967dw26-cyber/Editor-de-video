@@ -414,7 +414,9 @@ select {
   position: absolute; inset: 0 8px; display: flex; align-items: center; font-size: 11px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; pointer-events: none;
 }
-.title-overlay { position: absolute; pointer-events: none; }
+.title-overlay { position: absolute; touch-action: none; cursor: pointer; }
+.title-overlay.over-title { cursor: move; }
+.empty { z-index: 2; }
 
 /* Tiradores para recortar clips y cambiar la duración de los títulos */
 .trim-handle {

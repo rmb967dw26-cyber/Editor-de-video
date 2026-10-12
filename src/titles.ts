@@ -1,7 +1,7 @@
 import { newId } from './media'
 
 export type TitleFont = 'sans' | 'serif' | 'mono' | 'display'
-export type TitlePosition = 'top' | 'center' | 'bottom' | 'lower-third'
+export type TitlePosition = 'top' | 'center' | 'bottom' | 'lower-third' | 'custom'
 export type TitleBackground = 'none' | 'box' | 'band'
 
 /** Título o texto de la pista V2. Los tiempos son globales (segundos de la línea de tiempo). */
@@ -17,6 +17,9 @@ export interface TitleItem {
   bold: boolean
   position: TitlePosition
   align: 'left' | 'center' | 'right'
+  /** Centro del texto en fracción del ancho/alto (0–1); solo con `position: 'custom'`. */
+  x?: number
+  y?: number
   background: TitleBackground
   bgColor: string
   shadow: boolean
@@ -43,6 +46,7 @@ export const POSITION_LABELS: Record<TitlePosition, string> = {
   center: 'Centro',
   bottom: 'Abajo',
   'lower-third': 'Rótulo inferior',
+  custom: 'Libre (arrastrado)',
 }
 
 export const FADE_SECONDS = 0.4
@@ -107,48 +111,74 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
   return lines
 }
 
+export interface TitleLayout {
+  font: string
+  fontPx: number
+  lines: string[]
+  lineHeight: number
+  /** Punto de anclaje horizontal del texto según la alineación. */
+  anchorX: number
+  centerY: number
+  /** Rectángulo que ocupa el título, con su margen interior (para el fondo y para hacer clic). */
+  box: { x: number; y: number; w: number; h: number }
+}
+
+/** Calcula dónde y cómo se coloca un título en un fotograma de W×H. */
+export function layoutTitle(ctx: CanvasRenderingContext2D, title: TitleItem, W: number, H: number): TitleLayout {
+  const fontPx = Math.max(4, (title.size / 100) * H)
+  const font = `${title.bold ? 700 : 400} ${fontPx}px ${FONT_STACKS[title.font]}`
+  ctx.save()
+  ctx.font = font
+  const margin = W * 0.06
+  const custom = title.position === 'custom'
+  const maxWidth = custom ? W * 0.9 : title.position === 'lower-third' ? W * 0.6 : W - margin * 2
+  const lines = wrapLines(ctx, title.text, maxWidth)
+  const blockW = Math.max(...lines.map((l) => ctx.measureText(l).width), 1)
+  ctx.restore()
+  const lineHeight = fontPx * 1.22
+  const blockH = lines.length * lineHeight
+  const align = title.align
+
+  let centerY: number
+  let blockLeft: number
+  if (custom) {
+    centerY = (title.y ?? 0.5) * H
+    blockLeft = (title.x ?? 0.5) * W - blockW / 2
+  } else {
+    centerY =
+      title.position === 'top' ? H * 0.08 + blockH / 2
+        : title.position === 'bottom' ? H * 0.9 - blockH / 2
+          : title.position === 'lower-third' ? H * 0.82 - blockH / 2
+            : H / 2
+    blockLeft = align === 'left' ? margin : align === 'right' ? W - margin - blockW : W / 2 - blockW / 2
+  }
+  const anchorX = align === 'left' ? blockLeft : align === 'right' ? blockLeft + blockW : blockLeft + blockW / 2
+  const pad = fontPx * 0.35
+  return {
+    font, fontPx, lines, lineHeight, anchorX, centerY,
+    box: { x: blockLeft - pad, y: centerY - blockH / 2 - pad, w: blockW + pad * 2, h: blockH + pad * 2 },
+  }
+}
+
 /**
  * Dibuja un título en un lienzo de W×H. Lo usan la vista previa y la
  * exportación, así que el resultado es idéntico en ambos.
  */
 export function drawTitle(ctx: CanvasRenderingContext2D, title: TitleItem, W: number, H: number, opacity = 1) {
   if (opacity <= 0 || !title.text.trim()) return
-  const fontPx = Math.max(4, (title.size / 100) * H)
+  const layout = layoutTitle(ctx, title, W, H)
+  const { box, fontPx, lines, lineHeight, anchorX, centerY } = layout
   ctx.save()
   ctx.globalAlpha = opacity
-  ctx.font = `${title.bold ? 700 : 400} ${fontPx}px ${FONT_STACKS[title.font]}`
+  ctx.font = layout.font
   ctx.textBaseline = 'middle'
-
-  const margin = W * 0.06
-  const lowerThird = title.position === 'lower-third'
-  const maxWidth = (lowerThird ? W * 0.6 : W - margin * 2)
-  const lines = wrapLines(ctx, title.text, maxWidth)
-  const lineHeight = fontPx * 1.22
-  const blockH = lines.length * lineHeight
-  const widths = lines.map((l) => ctx.measureText(l).width)
-  const blockW = Math.max(...widths, 1)
-
-  const centerY =
-    title.position === 'top' ? H * 0.08 + blockH / 2
-      : title.position === 'bottom' ? H * 0.9 - blockH / 2
-        : lowerThird ? H * 0.82 - blockH / 2
-          : H / 2
-  const align = title.align
-  const anchorX = align === 'left' ? margin : align === 'right' ? W - margin : W / 2
-  const pad = fontPx * 0.35
 
   if (title.background !== 'none') {
     ctx.fillStyle = title.bgColor
-    const prev = ctx.globalAlpha
-    ctx.globalAlpha = prev * 0.72
-    const top = centerY - blockH / 2 - pad
-    if (title.background === 'band') {
-      ctx.fillRect(0, top, W, blockH + pad * 2)
-    } else {
-      const left = align === 'left' ? anchorX - pad : align === 'right' ? anchorX - blockW - pad : anchorX - blockW / 2 - pad
-      ctx.fillRect(left, top, blockW + pad * 2, blockH + pad * 2)
-    }
-    ctx.globalAlpha = prev
+    ctx.globalAlpha = opacity * 0.72
+    if (title.background === 'band') ctx.fillRect(0, box.y, W, box.h)
+    else ctx.fillRect(box.x, box.y, box.w, box.h)
+    ctx.globalAlpha = opacity
   }
 
   if (title.shadow) {
@@ -157,7 +187,8 @@ export function drawTitle(ctx: CanvasRenderingContext2D, title: TitleItem, W: nu
     ctx.shadowOffsetY = fontPx * 0.05
   }
   ctx.fillStyle = title.color
-  ctx.textAlign = align
+  ctx.textAlign = title.align
+  const blockH = lines.length * lineHeight
   lines.forEach((line, i) => {
     ctx.fillText(line, anchorX, centerY - blockH / 2 + lineHeight * (i + 0.5))
   })

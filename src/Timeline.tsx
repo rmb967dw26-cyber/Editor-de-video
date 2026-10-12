@@ -141,6 +141,7 @@ export function Timeline(props: Props) {
     if (e.button !== 0) return
     e.stopPropagation()
     e.preventDefault()
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
     const x0 = e.clientX
     const scale = pxPerSec
     // En modo «Ajustar», recortar cambia la duración total y con ella la escala:
