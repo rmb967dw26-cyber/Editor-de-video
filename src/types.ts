@@ -42,6 +42,8 @@ export interface Stinger {
   /** Segundo del stinger en el que se produce el corte. */
   cutPoint: number
   thumbnail: string | null
+  /** Paquete al que pertenece en el banco de transiciones. */
+  category: string
 }
 
 /** Una transición colocada en la línea de tiempo, en segundos globales. */

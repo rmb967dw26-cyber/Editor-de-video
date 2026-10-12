@@ -15,7 +15,6 @@ interface Props {
   onApplyTransitionToAll: (stingerId: string | null) => void
   onAddStingers: () => void
   onStingerChange: (id: string, patch: Partial<Stinger>) => void
-  onStingerRemove: (id: string) => void
   onMusicChange: (patch: Partial<MusicTrack>) => void
   onMusicRemove: () => void
 }
@@ -64,6 +63,8 @@ export function Inspector(props: Props) {
   const { clip, index, count, music, stingers } = props
   const [tab, setTab] = useState<Tab>('video')
   const isLast = index === count - 1
+  const current = clip?.transitionId ? stingers.find((s) => s.id === clip.transitionId) : undefined
+  const categories = [...new Set(stingers.map((s) => s.category))].sort((a, b) => a.localeCompare(b))
 
   return (
     <section className="panel inspector">
@@ -188,8 +189,12 @@ export function Inspector(props: Props) {
                       <option value="">
                         {isLast ? 'Es el último clip' : stingers.length ? 'Corte directo' : 'Importa transiciones primero'}
                       </option>
-                      {stingers.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
+                      {categories.map((c) => (
+                        <optgroup key={c} label={c}>
+                          {stingers.filter((s) => s.category === c).map((s) => (
+                            <option key={s.id} value={s.id}>{s.name.replace(/\.webm$/i, '')}</option>
+                          ))}
+                        </optgroup>
                       ))}
                     </select>
                   </label>
@@ -203,25 +208,31 @@ export function Inspector(props: Props) {
                 </>
               )}
             </Section>
-            <Section title="Transiciones importadas">
-              {stingers.length === 0 && (
-                <p className="muted small-text">
-                  Importa transiciones <i>stinger</i> en WEBM con fondo transparente (descomprime antes el .rar o .zip).
-                </p>
-              )}
-              {stingers.map((s) => (
-                <div key={s.id} className="stinger-row">
+            <Section title="Ajustes de la transición" enabled={!!current}>
+              {current ? (
+                <div className="stinger-row">
                   <div className="stinger-head">
-                    {s.thumbnail && <img src={s.thumbnail} alt="" />}
-                    <span className="param-text" title={s.name}>{s.name}</span>
-                    <button className="icon-btn ghost" onClick={() => props.onStingerRemove(s.id)} title="Quitar transición">✕</button>
+                    {current.thumbnail && <img src={current.thumbnail} alt="" />}
+                    <span className="param-text" title={current.name}>
+                      {current.name.replace(/\.webm$/i, '')} <span className="muted">· {current.category}</span>
+                    </span>
                   </div>
                   <Param
-                    label="Corte en" min={0} max={s.duration} step={0.05} value={s.cutPoint}
-                    display={formatTime(s.cutPoint)} onChange={(v) => props.onStingerChange(s.id, { cutPoint: v })}
+                    label="Corte en" min={0} max={current.duration} step={0.05} value={current.cutPoint}
+                    display={formatTime(current.cutPoint)} onChange={(v) => props.onStingerChange(current.id, { cutPoint: v })}
                   />
+                  <p className="muted small-text insp-note">
+                    Momento en que la animación tapa la pantalla y se pasa al clip siguiente. Se guarda en el banco y se aplica
+                    en todos los cortes que usen esta transición.
+                  </p>
                 </div>
-              ))}
+              ) : (
+                <p className="muted small-text">
+                  {stingers.length
+                    ? 'Elige una transición arriba o arrástrala desde el panel Efectos a un corte.'
+                    : 'Tu banco está vacío: importa transiciones WEBM desde el panel Efectos.'}
+                </p>
+              )}
               <div className="insp-actions">
                 <button className="small" onClick={props.onAddStingers}>＋ Importar transiciones</button>
               </div>

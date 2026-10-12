@@ -13,6 +13,9 @@ import { EffectsLibrary } from './EffectsLibrary'
 import { Mixer } from './Mixer'
 import { audioEngine } from './audioEngine'
 import { useUndoHistory } from './useUndoHistory'
+import {
+  categoryFromPath, loadBank, persistStinger, pickStingerFiles, removeFromBank, requestPersistentStorage,
+} from './stingerBank'
 
 const isAudioFile = (f: File) => f.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(f.name)
 const isVideoFile = (f: File) => f.type.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v)$/i.test(f.name)
@@ -62,6 +65,7 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement>(null)
   const stingerRef = useRef<HTMLVideoElement>(null)
   const stingerInput = useRef<HTMLInputElement>(null)
+  const stingerFolderInput = useRef<HTMLInputElement>(null)
   const videoInput = useRef<HTMLInputElement>(null)
 
   // Posición de cada clip en la línea de tiempo global.
@@ -273,17 +277,16 @@ export default function App() {
   }, [trackNames])
 
   // ---- Deshacer / rehacer ----
-  // Todo lo que forma parte del montaje. La biblioteca de medios no entra: importar
-  // un archivo no se deshace, pero sí el clip que se añade a la línea de tiempo.
+  // Todo lo que forma parte del montaje. Las bibliotecas (medios y banco de
+  // transiciones) no entran: importar no se deshace, pero sí usarlas en el montaje.
   const project = useMemo(
-    () => ({ clips, music, stingers, a1, a2Muted, master, trackNames }),
-    [clips, music, stingers, a1, a2Muted, master, trackNames],
+    () => ({ clips, music, a1, a2Muted, master, trackNames }),
+    [clips, music, a1, a2Muted, master, trackNames],
   )
   const restoreProject = useCallback((p: typeof project) => {
     setPlaying(false)
     setClips(p.clips)
     setMusic(p.music)
-    setStingers(p.stingers)
     setA1(p.a1)
     setA2Muted(p.a2Muted)
     setMaster(p.master)
@@ -348,32 +351,86 @@ export default function App() {
     setSelectedId(clip.id)
   }, [])
 
-  /** Importa transiciones stinger (WEBM con transparencia). */
-  const addStingers = useCallback(async (files: File[]) => {
+  // ---- Banco de transiciones (guardado en este navegador) ----
+  const stingersRef = useRef(stingers)
+  stingersRef.current = stingers
+
+  useEffect(() => {
+    let alive = true
+    loadBank()
+      .then((records) => {
+        if (!alive || records.length === 0) return
+        const loaded: Stinger[] = records.map((r) => ({
+          id: r.id, file: r.file, url: URL.createObjectURL(r.file), name: r.name, duration: r.duration,
+          cutPoint: r.cutPoint, thumbnail: r.thumbnail, category: r.category,
+        }))
+        setStingers((ss) => [...loaded, ...ss.filter((s) => !loaded.some((l) => l.id === s.id))])
+      })
+      .catch(() => setError('No se pudo abrir el banco de transiciones de este navegador; las que importes no se guardarán.'))
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  /** Importa transiciones stinger (WEBM con transparencia) y las guarda en el banco. */
+  const addStingers = useCallback(async (input: File[]) => {
     setError(null)
-    setImporting((n) => n + files.length)
-    for (const file of files) {
+    const files = pickStingerFiles(input)
+    if (files.length === 0) {
+      setError('No se encontró ningún archivo .webm para usar como transición.')
+      return
+    }
+    requestPersistentStorage()
+    const known = new Set(stingersRef.current.map((s) => `${s.name}|${s.file.size}`))
+    const fresh = files.filter((f) => !known.has(`${f.name}|${f.size}`))
+    let failed = 0
+    let unsaved = 0
+    setImporting((n) => n + fresh.length)
+    for (const file of fresh) {
       const url = URL.createObjectURL(file)
       try {
         const duration = await readDuration(url, 'video')
         const cutPoint = duration / 2
         const thumbnail = await captureThumbnail(url, cutPoint * 0.6, 'image/png')
-        const stinger: Stinger = { id: newId(), file, url, name: file.name, duration, cutPoint, thumbnail }
+        const stinger: Stinger = {
+          id: newId(), file, url, name: file.name, duration, cutPoint, thumbnail,
+          category: categoryFromPath(file.webkitRelativePath || file.name),
+        }
         setStingers((ss) => [...ss, stinger])
-      } catch (e) {
+        await persistStinger(stinger).catch(() => unsaved++)
+      } catch {
         URL.revokeObjectURL(url)
-        setError(`No se pudo abrir la transición «${file.name}»: ${(e as Error).message}`)
+        failed++
       } finally {
         setImporting((n) => n - 1)
       }
     }
+    const notes = [
+      files.length > fresh.length && `${files.length - fresh.length} ya estaban en el banco`,
+      failed > 0 && `${failed} no se pudieron abrir`,
+      unsaved > 0 && `${unsaved} no se pudieron guardar en el navegador (¿falta espacio?)`,
+    ].filter(Boolean)
+    if (notes.length) setError(`Transiciones: ${notes.join(' · ')}.`)
   }, [])
 
   const removeStinger = useCallback((id: string) => {
-    // La URL no se libera: deshacer puede volver a necesitar la transición.
+    const s = stingersRef.current.find((x) => x.id === id)
+    if (!s || !window.confirm(`¿Quitar «${s.name}» del banco de transiciones?`)) return
     setStingers((ss) => ss.filter((x) => x.id !== id))
     setClips((cs) => cs.map((c) => (c.transitionId === id ? { ...c, transitionId: null } : c)))
+    removeFromBank(id).catch(() => {})
   }, [])
+
+  // Al arrastrar el punto de corte se guarda solo el valor final, no cada movimiento.
+  const saveTimers = useRef(new Map<string, number>())
+  const changeStinger = (id: string, patch: Partial<Stinger>) => {
+    const current = stingersRef.current.find((s) => s.id === id)
+    if (!current) return
+    const next = { ...current, ...patch }
+    setStingers((ss) => ss.map((s) => (s.id === id ? next : s)))
+    window.clearTimeout(saveTimers.current.get(id))
+    saveTimers.current.set(id, window.setTimeout(() => persistStinger(next).catch(() => {}), 400))
+  }
 
   // ---- Edición ----
   const updateClip = useCallback((id: string, patch: Partial<Clip>) => {
@@ -526,6 +583,14 @@ export default function App() {
             e.target.value = ''
           }}
         />
+        <input
+          ref={stingerFolderInput} type="file" multiple hidden
+          {...{ webkitdirectory: '' }}
+          onChange={(e) => {
+            addStingers([...(e.target.files ?? [])])
+            e.target.value = ''
+          }}
+        />
       </header>
 
       {error && (
@@ -601,10 +666,7 @@ export default function App() {
               setClips((cs) => cs.map((c, i) => (i < cs.length - 1 ? { ...c, transitionId } : c)))
             }
             onAddStingers={() => stingerInput.current?.click()}
-            onStingerChange={(id, patch) =>
-              setStingers((ss) => ss.map((s) => (s.id === id ? { ...s, ...patch } : s)))
-            }
-            onStingerRemove={removeStinger}
+            onStingerChange={changeStinger}
             onMusicChange={(patch) => setMusic((m) => (m ? { ...m, ...patch } : m))}
             onMusicRemove={() => setMusic(null)}
           />
@@ -613,7 +675,12 @@ export default function App() {
 
       <div className={`lower ${panels.effects ? '' : 'no-left'} ${panels.mixer ? '' : 'no-right'}`}>
         {panels.effects && (
-          <EffectsLibrary stingers={stingers} onImport={() => stingerInput.current?.click()} onRemove={removeStinger} />
+          <EffectsLibrary
+            stingers={stingers}
+            onImport={() => stingerInput.current?.click()}
+            onImportFolder={() => stingerFolderInput.current?.click()}
+            onRemove={removeStinger}
+          />
         )}
         <Timeline
           clips={clips}

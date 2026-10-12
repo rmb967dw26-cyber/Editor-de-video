@@ -163,6 +163,16 @@ select {
 }
 .effect-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
 .hint { padding: 6px 4px; }
+.head-actions { margin-left: auto; display: flex; gap: 2px; }
+.panel-head .head-actions .icon-btn { margin-left: 0; }
+.bin-name { overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.effects-search {
+  font: inherit; font-size: 12px; padding: 4px 8px; margin-bottom: 4px; border-radius: 3px;
+  background: var(--field); color: var(--text); border: 1px solid var(--line); width: 100%;
+}
+.effects-group-block { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.bank-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 8px 4px; }
+.insp-note { padding: 4px 0 0 17px; }
 
 /* ---------- Visores ---------- */
 .viewers { display: grid; gap: 3px; min-height: 0; min-width: 0; grid-template-columns: minmax(0, 1fr); }

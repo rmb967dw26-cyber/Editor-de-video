@@ -7,6 +7,7 @@ Editor de video que funciona en el navegador. Todo se procesa en tu equipo: los 
 Interfaz de editor profesional: biblioteca de medios, visor de origen y de programa, inspector con pestañas, panel de efectos, línea de tiempo con pistas V1/A1/A2 y formas de onda, y mezclador con medidores de nivel.
 
 - **Clips:** importa varios videos (botón o arrastrar y soltar), recórtalos, divídelos en el cursor y reordénalos arrastrando en la línea de tiempo.
+- **Banco de transiciones:** importa una carpeta completa (p. ej. la de tus paquetes descomprimidos) y el editor guarda todos los WEBM en el navegador, agrupados por paquete. Siguen ahí la próxima vez que abras el editor.
 - **Transiciones stinger:** importa WEBM con transparencia, elige el punto de corte y asígnalas entre clips. Se ven en la vista previa y se incluyen al exportar, con su sonido.
 - **Audio:** ajusta el volumen de cada clip o siléncialo, y añade música de fondo con punto de inicio, volumen y fundido de salida.
 - **Vista previa** continua de toda la secuencia.
